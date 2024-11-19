@@ -3466,8 +3466,8 @@ Proof.
   by lia.
 Qed.
 
-Lemma validw_sub_region_addr_ofs se rmap m0 s1 s2 sr ty addr ofs al ws :
-  valid_state se rmap m0 s1 s2 ->
+Lemma validw_sub_region_addr_ofs table rmap se m0 s1 s2 sr ty addr ofs al ws :
+  valid_state table rmap se m0 s1 s2 ->
   wf_sub_region se sr ty ->
   sub_region_addr se sr = ok addr ->
   0 <= ofs /\ ofs + wsize_size ws <= size_of ty ->
@@ -3485,30 +3485,37 @@ Proof.
   by apply (zbetween_sub_region_addr_ofs hwf haddr hbound).
 Qed.
 
-Lemma alloc_lvalP se rmap r1 r2 v ty m0 (s1 s2: estate) :
+Lemma alloc_lvalP table rmap se r1 r2 v ty m0 (s1 s2: estate) :
   alloc_lval pmap rmap r1 ty = ok r2 -> 
-  valid_state se rmap m0 s1 s2 -> 
+  valid_state table rmap se m0 s1 s2 -> 
   type_of_val v = ty ->
-  forall s1', write_lval true gd r1 v s1 = ok s1' ->
-  exists2 s2',
-    write_lval true [::] r2.2 v s2 = ok s2' &
-    valid_state se r2.1 m0 s1' s2'.
+  forall s1' table2 vme,
+    write_lval true gd r1 v s1 = ok s1' ->
+    wf_table table2 (with_vm se vme) s1'.(evm) ->
+    se.(evm) <=1 vme ->
+    exists2 s2',
+      write_lval true [::] r2.2 v s2 = ok s2' &
+      valid_state table2 r2.1 (with_vm se vme) m0 s1' s2'.
 Proof.
   move=> ha hvs ?; subst ty.
   case: r1 ha => //; rewrite /alloc_lval.
   (* Lnone *)
-  + by move=> vi ty1 [<-] /= s1' /write_noneP; rewrite /write_none => - [-> -> ->]; exists s2.
+  + move=> vi ty1 [<-] /= s1' table2 vme /write_noneP.
+    rewrite /write_none => - [-> -> ->] hwft2 huincl; exists s2 => //.
+    case:(hvs) => hscs hvalid hdisj hincl hincl2 hunch hrip hrsp heqvm hwft hwfr heqmem hglobv htop.
+    split=> //.
+    by apply (wf_rmap_vm_uincl huincl).
 
   (* Lvar *)
   + move=> x.
     case hlx: get_local => [pk | ]; last first.
-    + t_xrbindP=> /check_diffP hnnew <- s1' /= /write_varP [-> hdb htr].
+    + t_xrbindP=> /check_diffP hnnew <- s1' table2 vme /= /write_varP [-> hdb htr] hwft2 huincl.
       eexists; first by apply: (write_var_truncate hdb htr).
-      by apply valid_state_set_var.
+      by apply: valid_state_set_var hwft2 huincl.
     case heq: is_word_type => [ws | //]; move /is_word_typeP : heq => hty.
     case htyv: subtype => //.
-    t_xrbindP=> sr /get_sub_regionP hsr rmap2 hsetw [xi ofsi] ha [<-] /= s1'
-      /write_varP [-> hdb htr] /=.
+    t_xrbindP=> sr /get_sub_regionP hsr rmap2 hsetw [xi ofsi] ha [<-] /= s1' table2 vme
+      /write_varP [-> hdb htr] /= hwft2 huincl.
     have /wfr_wf hwf := hsr.
     have /wf_locals hlocal := hlx.
     have /wfr_ptr := hsr; rewrite hlx => -[_ [[<-] hpk]].
@@ -3526,7 +3533,7 @@ Proof.
     rewrite hmem2 /=; eexists; first by reflexivity.
     (* valid_state update word *)
     have [_ _ hset] := set_wordP hwf haddr hsetw.
-    apply: (valid_state_set_word hvs hsr haddr hlx hpk _ _ _ hsetw) => //.
+    apply: (valid_state_set_word hvs hsr haddr _ _ _ _ hsetw) => //.
     + by apply (Memory.write_mem_stable hmem2).
     + by move=> ??; apply (write_validw_eq hmem2).
     + move=> al p ws''.
@@ -3543,7 +3550,7 @@ Proof.
 
   (* Lmem *)
   + move=> al ws x e1 /=; t_xrbindP => /check_varP hx /check_diffP hnnew e1' /(alloc_eP hvs) he1 <-.
-    move=> s1' xp ? hgx hxp w1 v1 /he1 he1' hv1 w hvw mem1 hmem1 <- /=.
+    move=> s1' table2 vme xp ? hgx hxp w1 v1 /he1 he1' hv1 w hvw mem1 hmem1 <- /= hwft2 huincl.
     have := get_var_kindP hvs hx hnnew; rewrite /get_gvar /= => /(_ _ _ hgx) -> /=.
     have {}he1': sem_pexpr true [::] s2 e1' >>= to_pointer = ok w1.
     + have [ws1 [wv1 [? hwv1]]] := to_wordI hv1; subst.
@@ -3555,7 +3562,7 @@ Proof.
     have /writeV -/(_ w) [mem2 hmem2] := hvp2.
     rewrite hmem2 /=; eexists; first by reflexivity.
     (* valid_state update mem *)
-    case:(hvs) => hscs hvalid hdisj hincl hincl2 hunch hrip hrsp heqvm hwfr heqmem hglobv htop.
+    case:(hvs) => hscs hvalid hdisj hincl hincl2 hunch hrip hrsp heqvm hwft hwfr heqmem hglobv htop.
     constructor => //=.
     + move=> ??; rewrite (write_validw_eq hmem2); apply hvalid.
     + by move=> ???; rewrite (write_validw_eq hmem1); apply hdisj.
@@ -3565,7 +3572,8 @@ Proof.
       rewrite (hunch p hvalid2 hvalid3 hdisj2).
       symmetry; apply (writeP_neq _ hmem2).
       by apply (disjoint_range_valid_not_valid_U8 hvp1 hvalid3).
-    + case: (hwfr) => hwfsr hval hptr; split=> //.
+    + apply (wf_rmap_vm_uincl huincl).
+      case: (hwfr) => hwfsr hwfst hval hptr; split=> //.
       + move=> y sry statusy vy hgvalid hgy.
         assert (hwfy := check_gvalid_wf hwfsr hgvalid).
         have hreadeq := writeP_neq _ hmem2.
@@ -3591,8 +3599,8 @@ Proof.
 
   (* Laset *)
   move=> al aa ws x e1 /=; t_xrbindP => e1' /(alloc_eP hvs) he1.
-  move=> hr2 s1'; apply on_arr_varP => n t hty hxt.
-  t_xrbindP => i1 v1 /he1 he1' hi1 w hvw t' htt' /write_varP [? hdb htr]; subst s1'.
+  move=> hr2 s1' table2 vme; apply: on_arr_varP => n t hty hxt.
+  t_xrbindP => i1 v1 /he1 he1' hi1 w hvw t' htt' /write_varP [? hdb htr] hwft2 huincl; subst s1'.
   have {he1} he1 : sem_pexpr true [::] s2 e1' >>= to_int = ok i1.
   + have ? := to_intI hi1; subst.
     move: he1'; rewrite /truncate_val /= => /(_ _ erefl) [] ve1' [] -> /=.
@@ -3603,7 +3611,7 @@ Proof.
     + by rewrite /get_var_kind /= hlx.
     rewrite /get_gvar /= => hxt2.
     rewrite he1 hxt2 /= hvw /= htt' /= (write_var_truncate hdb htr) //.
-    by eexists; first reflexivity; apply valid_state_set_var.
+    by eexists; first reflexivity; apply: valid_state_set_var hwft2 huincl.
   t_xrbindP=> -[sr status] /get_sub_region_statusP [hsr ->].
   t_xrbindP=> rmap2 hset [xi ofsi] ha [<-] /=.
   have /wfr_wf hwf := hsr.
@@ -3623,13 +3631,14 @@ Proof.
   have hofs: 0 <= i1 * mk_scale aa ws /\ i1 * mk_scale aa ws + size_of (sword ws) <= size_slot x.
   + by rewrite hty.
   have hvalideq := write_validw_eq hmem2.
-  apply: (valid_state_set_word hvs hsr haddr hlx hpk _ hvalideq _ hset htr).
+  apply: (valid_state_set_word hvs hsr haddr  _ hvalideq _ _ hset htr) => //.
   + by apply (Memory.write_mem_stable hmem2).
   + move=> al' p ws' hdisj.
     apply (writeP_neq _ hmem2).
     apply: disjoint_range_alt.
     apply: disjoint_zrange_incl_l hdisj.
     by apply (zbetween_sub_region_addr_ofs hwf haddr).
+  + by apply: get_var_status_wf_status wfr_status.
   have /vm_truncate_valE [_ ->]:= htr.
   split=> //.
   rewrite /eq_sub_region_val_read haddr.
@@ -3645,18 +3654,26 @@ Proof.
   by apply hread.
 Qed.
 
-Lemma alloc_lvalsP se rmap r1 r2 vs ty m0 (s1 s2: estate) :
+Lemma alloc_lvalsP table rmap se r1 r2 vs ty m0 (s1 s2: estate) :
   alloc_lvals pmap rmap r1 ty = ok r2 -> 
-  valid_state se rmap m0 s1 s2 -> 
+  valid_state table rmap se m0 s1 s2 -> 
   seq.map type_of_val vs = ty -> 
-  forall s1', write_lvals true gd s1 r1 vs = ok s1' ->
-  exists2 s2', write_lvals true [::] s2 r2.2 vs = ok s2' & valid_state se r2.1 m0 s1' s2'.
+  forall s1' table2 vme,
+    write_lvals true gd s1 r1 vs = ok s1' ->
+    wf_table table2 (with_vm se vme) s1'.(evm) ->
+    se.(evm) <=1 vme ->
+    exists2 s2',
+      write_lvals true [::] s2 r2.2 vs = ok s2' &
+      valid_state table2 r2.1 (with_vm se vme) m0 s1' s2'.
 Proof.
-  elim: r1 r2 rmap ty vs s1 s2=> //= [|a l IH] r2 rmap [ | ty tys] // [ | v vs] //.
-  + move=> s1 s2 [<-] Hvalid _ s1' [] <-; by exists s2.
-  move=> vs's1 s2; t_xrbindP => -[a' r3] ha [l' r4] /IH hrec <-.
-  move=> Hvalid [] hty htys s1' s1'' ha1 hl1.
-  have [s2' hs2' vs2']:= alloc_lvalP ha Hvalid hty ha1.
+  elim: r1 r2 rmap ty vs se s1 s2=> //= [|a l IH] r2 rmap [ | ty tys] // [ | v vs] //.
+  + move=> se s1 s2 [<-] Hvalid _ s1' table2 vme [<-] hwft2 huincl; exists s2 => //=.
+    case:(Hvalid) => hscs hvalid hdisj hincl hincl2 hunch hrip hrsp heqvm hwft hwfr heqmem hglobv htop.
+    split=> //.
+    by apply (wf_rmap_vm_uincl huincl).
+  move=> se s1 s2; t_xrbindP => -[a' r3] ha [l' r4] /IH hrec <-.
+  move=> Hvalid [] hty htys s1' table2 vme s1'' ha1 hl1 hwft2 huincl.
+  have [s2' hs2' vs2']:= alloc_lvalP ha Hvalid hty ha1 hwft2 huincl.
   have [s2'' hs2'' vs2'']:= hrec _ _ _ vs2' htys _ hl1.
   by exists s2'' => //=; rewrite hs2'.
 Qed.
