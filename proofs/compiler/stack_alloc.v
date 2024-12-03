@@ -772,23 +772,29 @@ Fixpoint symbolic_of_pexpr t e :=
 
 (* A version of symbolic_of_pexpr that fails. *)
 Definition get_symbolic_of_pexpr t e :=
-  let te := symbolic_of_pexpr t e in
-  match te with
-  | None => Error (stk_ierror_no_var "expression too complex")
-  | Some te => ok te
-  end.
+  o2r (stk_ierror_no_var "expression too complex") (symbolic_of_pexpr t e).
 
 Definition remove_binding table x :=
   {| bindings := Mvar.remove table.(bindings) x;
      counter := table.(counter);
      vars := table.(vars) |}.
 
+(* There are actually no arrays in the table, so the cases [Laset] and [Lasub]
+   are actually useless, but this allows not to maintain the invariant. *)
+Definition remove_binding_lval table lv :=
+  match lv with
+  | Lvar x | Laset _ _ _ x _ | Lasub _ _ _ x _ => remove_binding table x
+  | _ => table
+  end.
+
+(* Like in propagate_inline, we first call remove_binding_lval, then this
+   function. Thus we can consider only the interesting case here. *)
 Definition update_table table lv ty e :=
   match lv with
   | Lvar x =>
-    match symbolic_of_pexpr table e with
-    | None => ok (remove_binding table x)
-    | Some (table, e) =>
+    match e with
+    | None => ok table
+    | Some e =>
       Let _ :=
         (* FIXME: do we need to be that strict? *)
         assert (x.(vtype) == ty)
@@ -797,17 +803,7 @@ Definition update_table table lv ty e :=
       o2r (stk_ierror_no_var "variable not fresh (update_table)")
           (table_set_var table x e)
     end
-  | Laset _ _ _ x _ | Lasub _ _ _ x _ =>
-    (* if I'm not mistaken, there are actually no arrays in the table, but this
-       avoids maintaining this invariant *)
-    ok (remove_binding table x)
   | _ => ok table
-  end.
-
-Definition remove_binding_lval table lv :=
-  match lv with
-  | Lvar x => remove_binding table x
-  | _ => table
   end.
 
 End CLONE.
@@ -837,8 +833,8 @@ Definition clone (x:var_i) n :=
   in
   {| v_var := {| vtype := x.(vtype); vname := xn |}; v_info := x.(v_info) |}.
 
+Notation symbolic_of_pexpr := (symbolic_of_pexpr clone).
 Notation get_symbolic_of_pexpr := (get_symbolic_of_pexpr clone).
-Notation update_table := (update_table clone).
 
 Definition mul := Papp2 (Omul (Op_w Uptr)).
 Definition add := Papp2 (Oadd (Op_w Uptr)).
@@ -1144,6 +1140,7 @@ Definition alloc_array_move table rmap r tag e :=
         let ofs := mk_ofs_int aa ws se1 in
         let len := Pconst (arr_size ws len) in
         let (sr, status) := sub_region_status_at_ofs yv sr status ofs len in
+        Let e1 := alloc_e rmap e1 sint in
         Let eofs := addr_from_vpk_pexpr rmap yv vpk in
         ok (table, sr, status, mk_mov vpk, eofs.1, mk_ofs aa ws e1 eofs.2)
       end
@@ -1627,7 +1624,14 @@ Fixpoint alloc_i sao (trmap:table*region_map) (i: instr) : cexec (table * region
         Let: (table, rmap, ir) := add_iinfo ii (alloc_array_move_init table rmap r t e) in
         ok (table, rmap, [:: MkI ii ir])
       else
-        Let table := update_table table r ty e in
+        let (table, oe) :=
+          match symbolic_of_pexpr table e with
+          | Some (table, e) => (table, Some e)
+          | None => (table, None)
+          end
+        in
+        let table := remove_binding_lval table r in
+        Let table := update_table table r ty oe in
         Let e := add_iinfo ii (alloc_e rmap e ty) in
         Let r := add_iinfo ii (alloc_lval rmap r ty) in
         ok (table, r.1, [:: MkI ii (Cassgn r.2 t ty e)])
@@ -1643,12 +1647,18 @@ Fixpoint alloc_i sao (trmap:table*region_map) (i: instr) : cexec (table * region
       else
       Let table :=
         match rs, o, e with
-        | [:: x], Oasm op, [:: e] =>
-          if is_move_op op then update_table table x (head sbool (sopn_tout o)) e (* FIXME: sbool default value, should never happen *)
-          else
-            ok (foldl (fun table r => remove_binding_lval table r) table rs)
-        | _, _, _ =>
-          ok (foldl (fun table r => remove_binding_lval table r) table rs)
+        | [:: r], Oasm op, [:: e] =>
+          if is_move_op op then
+            let (table, oe) :=
+              match symbolic_of_pexpr table e with
+              | Some (table, e) => (table, Some e)
+              | None => (table, None)
+              end
+            in
+            let table := remove_binding_lval table r in
+            update_table table r (head sbool (sopn_tout o)) oe (* FIXME: sbool default value, should never happen *)
+          else ok (foldl remove_binding_lval table rs)
+        | _, _, _ => ok (foldl remove_binding_lval table rs)
         end
       in
       Let e  := add_iinfo ii (alloc_es rmap e (sopn_tin o)) in
