@@ -623,7 +623,7 @@ Definition sub_region_stkptr s ws cs :=
 
 Definition set_stack_ptr (rmap:region_map) s ws cs (x':var) :=
   let sr := sub_region_stkptr s ws cs in
-  let rv := set_move_status rmap x' sr.(sr_region) Valid in
+  let rv := set_word_status rmap sr x' Valid in
   {| var_region := rmap.(var_region);
      region_var := rv |}.
 
