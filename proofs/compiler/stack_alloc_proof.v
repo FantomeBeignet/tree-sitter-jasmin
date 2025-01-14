@@ -3372,8 +3372,7 @@ Lemma set_wordP se sr (x:var_i) ofs rmap al status ws rmap2 :
   set_word rmap al sr x status ws = ok rmap2 ->
   [/\ sr.(sr_region).(r_writable),
       is_aligned_if al ofs ws &
-      rmap2 = {| var_region := rmap.(var_region);
-                 region_var := set_word_status rmap sr x status |}].
+      rmap2 = set_word_pure rmap sr x status].
 Proof.
   move=> hwf ok_ofs; rewrite /set_word.
   by t_xrbindP=> /check_writableP hw /(check_alignP hwf ok_ofs) hal <-.
@@ -3438,11 +3437,49 @@ Proof.
   by case: eq_op => //; rewrite get_status_clear.
 Qed.
 
-Lemma check_gvalid_set_word se sr (x:var_i) rmap al status ws rmap2 y sry statusy :
+Lemma check_gvalid_set_word_pure se sr (x:var_i) rmap status y sry statusy :
+(*   Mvar.get rmap.(var_region) x = Some sr -> *)
+  wf_sub_region se sr x.(vtype) ->
+  sr.(sr_region).(r_writable) ->
+  check_gvalid (set_word_pure rmap sr x status) y = Some (sry, statusy) ->
+    [/\ ~ is_glob y, x = gv y :> var, Mvar.get rmap.(var_region) x = Some sry & statusy = status]
+  \/
+    [/\ ~ is_glob y, x <> gv y :> var, sr.(sr_region) = sry.(sr_region),
+        Mvar.get rmap.(var_region) y.(gv) = Some sry &
+        let statusy' := get_var_status rmap sry.(sr_region) y.(gv) in
+        statusy = odflt Unknown (clear_status_map_aux rmap sr.(sr_zone) y.(gv) statusy')]
+  \/
+    [/\ ~ is_glob y -> x <> gv y :> var, sr.(sr_region) <> sry.(sr_region) &
+        check_gvalid rmap y = Some (sry, statusy)].
+Proof.
+  move=> hwf hwritable.
+  have [cs ok_cs _] := hwf.(wfsr_zone).
+  have [ofs haddr _] := wunsigned_sub_region_addr hwf ok_cs.
+  rewrite /check_gvalid /=.
+  case: (@idP (is_glob y)) => hg.
+  + case heq: Mvar.get => [[ofs' ws']|//] [<- <-] /=.
+    right; right; split => //.
+    move=> heqr.
+    by move: hwritable; rewrite heqr.
+  case hsry: Mvar.get => [sr'|//] [? <-]; subst sr'.
+  rewrite get_var_status_set_word_status.
+  case: (x =P gv y :> var).
+  + move=> eq_xy.
+    left. split. done. done. congruence. simpl. congruence. done. done. admit.
+    move: hsry; rewrite -eq_xy hsr => -[<-].
+    rewrite eqxx.
+    by left; split.
+  move=> neq_xy.
+  case: eqP => heqr.
+  + by right; left; split.
+  by right; right; split.
+Qed.
+
+Lemma check_gvalid_set_word_pure se sr (x:var_i) rmap status y sry statusy :
   Mvar.get rmap.(var_region) x = Some sr ->
   wf_sub_region se sr x.(vtype) ->
-  set_word rmap al sr x status ws = ok rmap2 ->
-  check_gvalid rmap2 y = Some (sry, statusy) ->
+  sr.(sr_region).(r_writable) ->
+  check_gvalid (set_word_pure rmap sr x status) y = Some (sry, statusy) ->
     [/\ ~ is_glob y, x = gv y :> var, sry = sr & statusy = status]
   \/
     [/\ ~ is_glob y, x <> gv y :> var, sr.(sr_region) = sry.(sr_region),
@@ -3453,16 +3490,15 @@ Lemma check_gvalid_set_word se sr (x:var_i) rmap al status ws rmap2 y sry status
     [/\ ~ is_glob y -> x <> gv y :> var, sr.(sr_region) <> sry.(sr_region) &
         check_gvalid rmap y = Some (sry, statusy)].
 Proof.
-  move=> hsr hwf hset.
+  move=> hsr hwf hwritable.
   have [cs ok_cs _] := hwf.(wfsr_zone).
   have [ofs haddr _] := wunsigned_sub_region_addr hwf ok_cs.
-  have [hw _ ->] := set_wordP hwf haddr hset.
   rewrite /check_gvalid /=.
   case: (@idP (is_glob y)) => hg.
   + case heq: Mvar.get => [[ofs' ws']|//] [<- <-] /=.
     right; right; split => //.
     move=> heqr.
-    by move: hw; rewrite heqr.
+    by move: hwritable; rewrite heqr.
   case hsry: Mvar.get => [sr'|//] [? <-]; subst sr'.
   rewrite get_var_status_set_word_status.
   case: (x =P gv y :> var).
@@ -3495,6 +3531,7 @@ Proof.
   by rewrite hwf.(wfr_writable).
 Qed.
 
+(* TODO: should we use this def instead? *)
 Definition wfr_STATUS' (rmap : region_map) se :=
   forall r x,
     wf_status se (get_var_status rmap r x).
@@ -3511,27 +3548,40 @@ Proof.
   by rewrite /get_status hstatus /=.
 Qed.
 
-Lemma wfr_STATUS_set_word rmap se s1 s2 al sr x status ws rmap2 ty :
+Lemma wfr_STATUS_set_word_pure rmap se s1 s2 sr x status ty :
   wf_rmap rmap se s1 s2 ->
-  set_word rmap al sr x status ws = ok rmap2 ->
   wf_sub_region se sr ty ->
   wf_status se status ->
-  wfr_STATUS rmap2 se.
+  wfr_STATUS (set_word_pure rmap sr x status) se.
 Proof.
-  move=> hrmap + hwf hwfs.
-  rewrite /set_word; t_xrbindP=> _ _ <- /=.
-  apply wfr_STATUS_alt => r y /=.
+  move=> [hwfsr hwfst _ _] hwf hwfs.
+  move /wfr_STATUS_alt in hwfst; apply wfr_STATUS_alt.
+  move=> r y /=.
   rewrite get_var_status_set_word_status.
-  case: eq_op => /=; last first.
-  + by apply: get_var_status_wf_status wfr_status.
+  case: eq_op => //=.
   case: eq_op => //.
-  apply: (wf_status_clear_status_map_aux _ wfr_wf _ hwf.(wfsr_zone)).
-  by apply: get_var_status_wf_status wfr_status.
+  by apply: wf_status_clear_status_map_aux hwf.(wfsr_zone).
 Qed.
 
 (* TODO: move? *)
 Lemma mk_lvar_nglob x : ~ is_glob x -> mk_lvar x.(gv) = x.
 Proof. by case: x => [? []]. Qed.
+
+(* TODO: disjoint_zrangte addr ty + wf_sub_region se x  ty ?? *)
+Lemma eq_sub_region_val_set_word_pure se x sr addr mem2 s2 y sry statusy statusy' ty v rmap status :
+(*   Mvar.get rmap.(var_region) x = Some sr -> *)
+  sub_region_addr se sr = ok addr ->
+  (forall al p ws,
+    disjoint_zrange addr (size_slot x) p (wsize_size ws) ->
+    read mem2 al p ws = read (emem s2) al p ws) ->
+  check_gvalid rmap y = Some (sry, statusy) ->
+  check_gvalid (set_word_pure rmap sr x status) y = Some (sry, statusy') ->
+  eq_sub_region_val ty se (emem s2) sry statusy v ->
+  eq_sub_region_val ty se mem2 sry statusy' v.
+Proof.
+  move=> haddr hreadeq hgvalidy hgvalidy' [hread hty]; split=> //.
+  have := check_gvalid_set_word_pure
+  move=> off ofs w ok_ofs off_valid.
 
 (* This lemma is used only for [set_word]. *)
 Lemma wfr_VAL_set_word rmap se s1 s2 sr (x:var_i) ofs mem2 al status ws (rmap2 : region_map) v :
@@ -3554,7 +3604,7 @@ Proof.
     have [_ hty] := hval.
     rewrite get_gvar_eq //.
     by t_xrbindP => hd <-.
-  + move=> [hnglob hneq heqr hsry /= ->].
+  + simpl. move=> [hnglob hneq heqr hsry /= ->].
     have := check_gvalid_lvar hsry; rewrite mk_lvar_nglob // => hgvalid.
     rewrite get_gvar_neq //; move=> /(wfr_val hgvalid).
     assert (hwfy := check_gvalid_wf wfr_wf hgvalid).
@@ -4433,6 +4483,150 @@ Proof.
   by apply (distinct_regions_disjoint_zrange hwf hpaddr hwfy hpaddry heqr erefl).
 Qed.
 
+(* almost identical to check_gvalid_set_word *)
+Lemma check_gvalid_set_stack_ptr_ rmap s ws cs f y sry statusy :
+  (forall x sr, Mvar.get rmap.(var_region) x = Some sr -> ~ Sv.In x pmap.(vnew)) ->
+  Sv.In f pmap.(vnew) ->
+  check_gvalid (set_stack_ptr rmap s ws cs f) y = Some (sry, statusy) ->
+  [/\ ~ is_glob y, f <> gv y, (sub_region_stkptr s ws cs).(sr_region) = sry.(sr_region),
+        Mvar.get rmap.(var_region) y.(gv) = Some sry &
+        let statusy' := get_var_status rmap sry.(sr_region) y.(gv) in
+        statusy = odflt Unknown (clear_status_map_aux rmap (sub_region_stkptr s ws cs).(sr_zone) y.(gv) statusy')]
+  \/
+    [/\ ~ is_glob y -> f <> gv y, (sub_region_stkptr s ws cs).(sr_region) <> sry.(sr_region) &
+        check_gvalid rmap y = Some (sry, statusy)].
+Proof.
+  move=> hnnew hnew.
+  rewrite /check_gvalid /=.
+  case: (@idP (is_glob y)) => hg.
+  + case heq: Mvar.get => [[ofs' ws']|//] [<- <-].
+    by right; split.
+  case hsry: Mvar.get => [sr|//] [? <-]; subst sr.
+  have hneq: f <> y.(gv).
+  + by move /hnnew : hsry; congruence.
+  rewrite get_var_status_set_word_status.
+  have /eqP /negPf -> /= := hneq.
+  case: eqP => heqr /=.
+  + by left; split.
+  by right; split.
+Qed.
+
+
+Lemma valid_pk_set_stack_ptr_ (rmap : region_map) se s2 x s ofs ws cs f paddr mem2 y pky sry :
+  (forall x sr, Mvar.get rmap.(var_region) x = Some sr -> ~ Sv.In x pmap.(vnew)) ->
+  wf_stkptr x s ofs ws cs f ->
+  sub_region_addr se (sub_region_stkptr s ws cs) = ok paddr ->
+  (forall al p ws,
+    disjoint_range paddr Uptr p ws ->
+    read mem2 al p ws = read (emem s2) al p ws) ->
+  x <> y ->
+  get_local pmap y = Some pky ->
+  valid_pk rmap se s2 sry pky ->
+  valid_pk (set_stack_ptr rmap s ws cs f) se (with_mem s2 mem2) sry pky.
+Proof.
+  move=> hnnew hlocal hpaddr hreadeq hneq.
+  case: pky => //= sy ofsy wsy csy fy hly hpky.
+  have hwf := sub_region_stkptr_wf se hlocal.
+  assert (hwfy := sub_region_stkptr_wf se (wf_locals hly)).
+  rewrite /check_stack_ptr get_var_status_set_word_status.
+  case: eqP => heqr /=.
+  + have hneqf := hlocal.(wfs_distinct) hly hneq.
+    have /eqP /negPf -> := hneqf.
+    rewrite /clear_status_map_aux.
+    case heq: Mvar.get => [srfy|//].
+    have := hnnew _ _ heq (wf_locals hly).(wfs_new). done.
+    (* seems too easy: pseudo-variables are not in var_region, so we never touch them, is this correct and/or precise? *)
+  move=> hcheck paddry addry hpaddry haddry.
+  rewrite -(hpky hcheck _ _ hpaddry haddry).
+  apply hreadeq.
+  by apply (distinct_regions_disjoint_zrange hwf hpaddr hwfy hpaddry heqr erefl).
+Qed.
+
+Lemma valid_state_set_stack_ptr table rmap se m0 s1 s2 x s ofs ws cs f paddr mem2 sr addr status v :
+  valid_state table rmap se m0 s1 s2 ->
+  wf_sub_region se sr x.(vtype) ->
+  sub_region_addr se sr = ok addr ->
+  wf_status se status ->
+  get_local pmap x = Some (Pstkptr s ofs ws cs f) ->
+  sub_region_addr se (sub_region_stkptr s ws cs) = ok paddr ->
+  stack_stable (emem s2) mem2 ->
+  validw mem2 =3 validw (emem s2) ->
+  (forall al p ws,
+    disjoint_range paddr Uptr p ws ->
+    read mem2 al p ws = read (emem s2) al p ws) ->
+  read mem2 Aligned paddr Uptr = ok addr ->
+  truncatable true (vtype x) v ->
+  eq_sub_region_val x.(vtype) se (emem s2) sr status (vm_truncate_val (vtype x) v) ->
+  valid_state (remove_binding table x) (set_stack_ptr (set_move rmap x sr status) s ws cs f) se m0 (with_vm s1 (evm s1).[x <- v]) (with_mem s2 mem2).
+Proof.
+  move=> hvs hwf haddr hwfs hlx hpaddr hss hvalideq hreadeq hreadptr htr heqval.
+  have /wf_locals hlocal := hlx.
+  have hwf' := sub_region_stkptr_wf se hlocal.
+  case:(hvs) => hscs hvalid hdisj hincl hincl2 hunch hrip hrsp heqvm hwft hwfr heqmem hglobv htop.
+  constructor=> //=.
+  + by move=> ??; rewrite hvalideq; apply hvalid.
+  + by move=> ??; rewrite hvalideq; apply hincl.
+  + by move=> ??; rewrite hvalideq; apply hincl2.
+  + by apply (mem_unchanged_write_slot hwf' hpaddr refl_equal hreadeq hunch).
+  + move=> y hget; rewrite Vm.setP_neq; first by apply heqvm.
+    by apply/eqP; rewrite /get_local in hlx; congruence.
+  + by apply wf_table_set_var.
+  case: (hwfr) => hwfsr hwfst hval hptr; split.
+  + by apply: (wfr_WF_set hwf _ hwfsr).
+  + move /wfr_STATUS_alt in hwfst. apply wfr_STATUS_alt. move=> r y.
+    rewrite /=. rewrite get_var_status_set_word_status.
+    case: eqP => /= ?.
+    + case: eqP => //= ?.
+      apply: wf_status_clear_status_map_aux hwf'.(wfsr_zone).
+      + apply: (wfr_WF_set hwf _ hwfsr). reflexivity.
+      rewrite get_var_status_set_move_status.
+      case: eqP => //= ?.
+      by case: eqP.
+    rewrite /=. rewrite get_var_status_set_move_status.
+    case: eqP => //= ?.
+    by case: eqP.
+  + move=> y sry bytesy vy.
+    move=> hgvalidy. (*
+    have hptr': wfr_PTR (set_move rmap x sr status) se (with_mem s2 mem2).
+    + apply: wfr_PTR_set_move. apply hlx.
+      simpl. rewrite haddr hpaddr. move=> _ _ _ [<-] [<-]. done.
+      move=> z. *)
+    have hnnew: forall z srz,
+      Mvar.get (var_region (set_move rmap x sr status)) z = Some srz → ¬ Sv.In z (vnew pmap).
+    + move=> z srz /=.
+      rewrite Mvar.setP. case: eqP => //. move=> <- _. apply (wf_vnew hlx).
+      move=> _. apply (var_region_not_new hptr).
+    have := check_gvalid_set_stack_ptr_ hnnew hlocal.(wfs_new) hgvalidy. move=> [].
+    + move=> [hnglob hneq heqr hsry /= ->] hgety.
+      have := check_gvalid_lvar hsry; rewrite mk_lvar_nglob // => {}hgvalidy.
+      have /(check_gvalid_wf (wfr_WF_set hwf _ hwfsr)) -/(_ refl_equal) hwfy := hgvalidy.
+      assert (heqvaly := wfr_VAL_set_move htr heqval wfr_val hgvalidy hgety).
+      have:= eq_sub_region_val_same_region hwf' hpaddr hsry hwfy heqr hreadeq _ heqvaly. apply.
+      rewrite get_var_status_set_move_status.
+      move /wfr_STATUS_alt in hwfst.
+       case: eqP => //=. case: eqP => //.
+    move=> [? hneqr {}hgvalidy] hgety.
+    assert (heqvaly := wfr_VAL_set_move htr heqval wfr_val hgvalidy hgety).
+    have /(check_gvalid_wf (wfr_WF_set hwf _ hwfsr)) -/(_ refl_equal) hwfy := hgvalidy.
+    have := eq_sub_region_val_distinct_regions hwf' hpaddr hwfy hneqr erefl hreadeq heqvaly.
+    done.
+  + move=> y sry. rewrite [Mvar.get _ _]/=.
+    rewrite Mvar.setP.
+    case: eqP.
+    + move=> <- [<-].
+      exists (Pstkptr s ofs ws cs f); split=> //=.
+      rewrite haddr hpaddr. move=> _ _ _ [<-] [<-]. done.
+    move=> hneq /wfr_ptr [pky [hly hpky]].
+    exists pky; split=> //.
+    have := (valid_pk_set_stack_ptr_ _ hlocal hpaddr hreadeq hneq hly). apply.
+    + move=> z srz /=.
+      rewrite Mvar.setP. case: eqP => //. move=> <- _. apply (wf_vnew hlx).
+      move=> _. apply (var_region_not_new hptr).
+    by apply (valid_pk_set_move sr _ (wf_vnew hlx) (wf_locals hly) hpky).
+  + by apply (eq_mem_source_write_slot hvs hwf' hpaddr hreadeq).
+  by rewrite -(ss_top_stack hss).
+Qed.
+
 Lemma valid_state_set_move_stkptr table rmap se m0 s1 s2 x sr addr s ofs ws z f paddr status v :
   valid_state table rmap se m0 s1 s2 ->
   wf_sub_region se sr x.(vtype) ->
@@ -4467,6 +4661,74 @@ Proof.
   + apply: (wfr_PTR_set_move hlx _ hptr).
     by rewrite /= haddr hpaddr => _ _ _ [<-] [<-].
 Qed.
+
+Lemma valid_state_set_stack_ptr_test table rmap se m0 s1 s2 x sr addr s ofs ws cs f paddr status mem2 v :
+  valid_state table rmap se m0 s1 s2 ->
+  wf_sub_region se sr x.(vtype) ->
+  sub_region_addr se sr = ok addr ->
+  wf_status se status ->
+  get_local pmap x = Some (Pstkptr s ofs ws cs f) ->
+  sub_region_addr se (sub_region_stkptr s ws cs) = ok paddr ->
+(*   read mem2 Aligned paddr Uptr = ok addr -> *)
+  truncatable true (vtype x) v ->
+  eq_sub_region_val x.(vtype) se (emem s2) sr status (vm_truncate_val (vtype x) v) ->
+  valid_state
+    table (set_stack_ptr rmap s ws cs f)
+    se m0 s1 (with_mem s2 mem2) /\
+  eq_sub_region_val set_word_status x.(vtype) se mem2 sr  (vm_truncate_val (vtype x) v) ->.
+Proof.
+  move=> hvs hwf haddr hwfs hlx hpaddr.
+(*  have hreadeq': forall al p ws,
+    disjoint_range (sub_region_addr (sub_region_at_ofs (sub_region_stkptr s ws z) (Some 0) (wsize_size Uptr))) Uptr p ws ->
+    read mem2 al p ws = read (emem s2) al p ws.
+  + by move=> ???; rewrite -sub_region_addr_offset wrepr0 GRing.addr0; apply hreadeq.*)
+  have /wf_locals hlocal := hlx.
+  have hwf' := sub_region_stkptr_wf se hlocal.
+(*   have hwfs' := sub_region_at_ofs_0_wf hwfs. *)
+  case:(hvs) => hscs hvalid hdisj hincl hincl2 hunch hrip hrsp heqvm hwft hwfr heqmem hglobv htop.
+  constructor=> //=.
+  + case: (hwfr) => hwfsr hwfst hval hptr; split=> //.
+    + (* FIXME: clean *)
+      apply wfr_STATUS_alt.
+      move /wfr_STATUS_alt in hwfst.
+      move=> /= r y.
+      rewrite get_var_status_set_word_status.
+      case: eqP => //= ?.
+      case: eqP => // ?.
+      by apply: (wf_status_clear_status_map_aux _ hwfsr (hwfst _ _) hwf'.(wfsr_zone)).
+    + move=> y sry statusy vy.
+      move=> /(check_gvalid_set_stack_ptr hptr hlocal.(wfs_new)) [].
+      + move=> [].
+      move=> []. eauto.
+      move=> hgvalidy.
+      have: check_gvalid (set_stack_ptr rmap s ws cs f) y = Some (sry, statusy) /\  (~ is_glob y -> x <> y.(gv)).
+      + move: hgvalidy; rewrite /check_gvalid.
+        case: is_glob.
+        + by split.
+        simpl.
+        rewrite Mvar.removeP. case: eqP => // ?.
+      move=> [{}hgvalidy hneq_].
+      move: hgvalidy.
+      move=> /(check_gvalid_set_stack_ptr hptr hlocal.(wfs_new)) [].
+      + move=> [hnglob hneq heqr hsry /= ->].
+        have := check_gvalid_lvar hsry; rewrite mk_lvar_nglob // => hgvalidy.
+        move=> /(wfr_val hgvalidy).
+        have /hwfsr hwfy := hsry.
+        assert (hwfsy := check_gvalid_wf_status wfr_status hgvalidy).
+        by apply (eq_sub_region_val_same_region hwf' hpaddr hsry hwfy heqr hreadeq hwfsy).
+      move=> [? hneqr hgvalidy].
+      move=> /(wfr_val hgvalidy).
+      assert (hwfy := check_gvalid_wf wfr_wf hgvalidy).
+      by apply (eq_sub_region_val_distinct_regions hwf' hpaddr hwfy hneqr erefl hreadeq).
+    + move=> y sry /=.
+      rewrite Mvar.removeP; case: eqP => // hneq.
+      move=> /wfr_ptr [pky [hly hpky]].
+      exists pky; split=> //.
+      have := valid_pk_set_stack_ptr hptr hlocal hpaddr hreadeq hneq hly. apply. done. (*
+      apply (valid_pk_set_stack_ptr hlocal hreadeq hneq hly).
+      by apply (valid_pk_set_move sr _ (wf_vnew hlx) (wf_locals hly) hpky). *)
+  + by apply (eq_mem_source_write_slot hvs hwf' hpaddr hreadeq).
+  by rewrite -(ss_top_stack hss).
 
 Lemma valid_state_set_stack_ptr table rmap se m0 s1 s2 x sr addr s ofs ws cs f paddr mem2 status :
   valid_state table rmap se m0 s1 s2 ->

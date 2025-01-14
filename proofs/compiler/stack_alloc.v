@@ -502,6 +502,7 @@ Fixpoint get_suffix (z1 z2 : symbolic_zone) : option (option symbolic_zone) :=
     end
   end.
 
+(* TODO: split into fill_interval + fill_status? *)
 Definition fill_status status (z:symbolic_zone) :=
   match z with
   | [::] => Valid
@@ -575,14 +576,16 @@ Definition set_word_status (rmap:region_map) sr x status :=
   let sm := set_status sm x status in
   Mr.set rmap sr.(sr_region) sm.
 
+Definition set_word_pure rmap sr x status :=
+  {| var_region := rmap.(var_region);
+     region_var := set_word_status rmap sr x status |}.
+
 (* We write in variable [x]. We clear the zone corresponding to [x] for all
    variables of the same region, and set [status] as the new status of [x]. *)
 Definition set_word rmap al sr (x:var_i) status ws :=
   Let _ := check_writable x sr.(sr_region) in
   Let _ := check_align al x sr ws in
-  ok
-    {| var_region := rmap.(var_region);
-       region_var := set_word_status rmap sr x status |}.
+  ok (set_word_pure rmap sr x status).
 
 Definition set_move_status rv x r status :=
   let sm := get_status_map rv r in
@@ -623,9 +626,7 @@ Definition sub_region_stkptr s ws cs :=
 
 Definition set_stack_ptr (rmap:region_map) s ws cs (x':var) :=
   let sr := sub_region_stkptr s ws cs in
-  let rv := set_word_status rmap sr x' Valid in
-  {| var_region := rmap.(var_region);
-     region_var := rv |}.
+  set_word_pure rmap sr x' Valid.
 
 (* Checks that the stack pointer itself (not the pointed data) is valid *)
 Definition check_stack_ptr rv s ws cs x' :=
