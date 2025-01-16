@@ -1179,6 +1179,7 @@ Definition alloc_array_move table rmap r tag e :=
           let rmap := set_move rmap x sry statusy in (* TODO: we always do set_move -> factorize *)
           ok (table, rmap, nop)
         else
+          (* the order is important: set_stack_ptr may clear some part of sry *)
           let rmap := set_move rmap x sry statusy in (* TODO: we always do set_move -> factorize *)
           let rmap := set_stack_ptr rmap slot ws cs x' in
           let dx_ofs := cast_const (ofsx + cs.(cs_ofs)) in
