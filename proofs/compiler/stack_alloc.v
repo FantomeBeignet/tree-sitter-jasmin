@@ -511,10 +511,9 @@ Definition fill_status status (z:symbolic_zone) :=
     | Valid => Valid
     | Unknown => Unknown
     | Borrowed i =>
-      match remove_sub_interval i s with
-      | [::] => Valid
-      | i => Borrowed i
-      end
+      let i := remove_sub_interval i s in
+      if i is [::] then Valid
+      else Borrowed i
     end
   end.
 
@@ -597,22 +596,17 @@ Definition set_move (rmap:region_map) x sr status :=
   {| var_region := Mvar.set rmap.(var_region) x sr;
      region_var := rv |}.
 
-Definition set_move_sub_status rv r x status ofs len statusy :=
-  let status :=
-    if eq_expr ofs (Pconst 0) && eq_expr len (Pconst (size_slot x)) then statusy
+Definition insert_status x status ofs len statusy :=
+  if eq_expr ofs (Pconst 0) && eq_expr len (Pconst (size_slot x)) then statusy
+  else
+    let s := {| ss_ofs := ofs; ss_len := len |} in
+    if get_sub_status statusy s then
+      fill_status status [:: s]
     else
-      let s := {| ss_ofs := ofs; ss_len := len |} in
-      if get_sub_status statusy s then
-        fill_status status [:: s]
-      else
-        odflt Unknown (clear_status status [:: s])
-  in
-  let sm := get_status_map rv r in
-  let sm := set_status sm x status in
-  Mr.set rv r sm.
+      odflt Unknown (clear_status status [:: s]).
 
-Definition set_move_sub (rmap:region_map) r x ofs len status substatus :=
-  let rv := set_move_sub_status rmap r x ofs len status substatus in
+Definition set_move_sub (rmap:region_map) r x status ofs len substatus :=
+  let rv := set_move_status rmap x r (insert_status x status ofs len substatus) in
   {| var_region := rmap.(var_region);
      region_var := rv |}.
 
@@ -1189,6 +1183,10 @@ Definition alloc_array_move table rmap r tag e :=
       end
     end
   | Lasub aa ws len x e =>
+    (* TODO: can we clean/refactor?
+       We call sub_region_status_at_ofs but just need the region.
+       And both sub_region_status_at_ofs and set_move make a test to check
+       if ofs = 0 and len = full len. *)
     match get_local (v_var x) with
     | None   => Error (stk_ierror_basic x "register array remains")
     | Some _ =>
