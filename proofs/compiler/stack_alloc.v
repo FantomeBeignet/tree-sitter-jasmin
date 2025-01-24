@@ -503,18 +503,14 @@ Fixpoint get_suffix (z1 z2 : symbolic_zone) : option (option symbolic_zone) :=
   end.
 
 (* TODO: split into fill_interval + fill_status? *)
-Definition fill_status status (z:symbolic_zone) :=
-  match z with
-  | [::] => Valid
-  | s :: _ =>
-    match status with
-    | Valid => Valid
-    | Unknown => Unknown
-    | Borrowed i =>
-      let i := remove_sub_interval i s in
-      if i is [::] then Valid
-      else Borrowed i
-    end
+Definition fill_status status (s:symbolic_slice) :=
+  match status with
+  | Valid => Valid
+  | Unknown => Unknown
+  | Borrowed i =>
+    let i := remove_sub_interval i s in
+    if i is [::] then Valid
+    else Borrowed i
   end.
 
 (* None as a return value means Unknown *)
@@ -600,8 +596,8 @@ Definition insert_status x status ofs len statusy :=
   if eq_expr ofs (Pconst 0) && eq_expr len (Pconst (size_slot x)) then statusy
   else
     let s := {| ss_ofs := ofs; ss_len := len |} in
-    if get_sub_status statusy s then
-      fill_status status [:: s]
+    if get_sub_status statusy {| ss_ofs := 0%Z; ss_len := len |} then
+      fill_status status s
     else
       odflt Unknown (clear_status status [:: s]).
 
@@ -1152,7 +1148,7 @@ Definition alloc_array_move table rmap r tag e :=
       | Pdirect s _ ws cs sc =>
         let sr := sub_region_direct s ws cs sc in
         Let _  :=
-          assert (sub_region_beq sr sry)
+          assert (sub_region_beq sry sr)
                  (stk_ierror x
                     (pp_box [::
                       pp_s "the assignment to array"; pp_var x;
@@ -1196,7 +1192,7 @@ Definition alloc_array_move table rmap r tag e :=
       let len := Pconst (arr_size ws len) in
       let (sr', _) := sub_region_status_at_ofs x sr status ofs len in
       Let _ :=
-        assert (sub_region_beq sr' sry)
+        assert (sub_region_beq sry sr')
                (stk_ierror x
                  (pp_box [::
                    pp_s "the assignment to sub-array"; pp_var x;
