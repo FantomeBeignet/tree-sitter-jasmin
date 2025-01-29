@@ -1131,8 +1131,8 @@ Definition alloc_array_move table rmap r tag e :=
         let ofs := mk_ofs_int aa ws se1 in
         let len := Pconst (arr_size ws len) in
         let (sr, status) := sub_region_status_at_ofs yv sr status ofs len in
-        Let e1 := alloc_e rmap e1 sint in
         Let eofs := addr_from_vpk_pexpr rmap yv vpk in
+        Let e1 := alloc_e rmap e1 sint in
         ok (table, sr, status, mk_mov vpk, eofs.1, mk_ofs aa ws e1 eofs.2)
       end
     | _ => Error (stk_ierror_no_var "alloc_array_move: variable/subarray expected (y)")
