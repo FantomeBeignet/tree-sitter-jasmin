@@ -1220,10 +1220,11 @@ Definition is_protect_ptr_fail (rs:lvals) (o:sopn) (es:pexprs) :=
 Definition lower_protect_ptr_fail ii lvs t es :=
   slh_lowering.lower_slho shparams ii lvs t (SLHprotect Uptr) es.
 
-(* This seems to be a duplication of alloc_array_move, but we are able to share
-   the corresponding proofs *)
+(* It is very similar to alloc_array_move. Its proof is also very similar
+   to the one of alloc_array_move, so not that costly.
+   A cleaner solution may be possible. *)
 Definition alloc_protect_ptr rmap ii r t e msf :=
-  Let: (sry, statusy, vpk, ey) :=
+  Let: (sry, statusy, ey) :=
     match e with
     | Pvar y =>
       let yv := y.(gv) in
@@ -1233,11 +1234,9 @@ Definition alloc_protect_ptr rmap ii r t e msf :=
       | Some vpk =>
         Let _ := assert (if vpk is VKptr (Pregptr _) then true else false)
                         (stk_error_no_var "argument of protect_ptr should be a reg ptr") in
-        Let _ := assert (if r is Lvar _ then true else false)
-                        (stk_error_no_var "destination of protect_ptr should be a reg ptr") in
         Let: (sr, status) := get_gsub_region_status rmap yv vpk in
         Let: (e, _ofs) := addr_from_vpk_pexpr rmap yv vpk in (* ofs is ensured to be 0 *)
-        ok (sr, status, vpk, e)
+        ok (sr, status, e)
       end
     | Psub _ _ _ _ _ =>
       Error (stk_error_no_var "argument of protect_ptr cannot be a sub array")
@@ -1252,9 +1251,9 @@ Definition alloc_protect_ptr rmap ii r t e msf :=
     | Some pk =>
       match pk with
       | Pregptr p =>
+        Let msf := add_iinfo ii (alloc_e rmap msf ty_msf) in
         let rmap := set_move rmap x sry statusy in
         let dx := Lvar (with_var x p) in
-        Let msf := add_iinfo ii (alloc_e rmap msf (sword msf_size)) in
         Let ir := lower_protect_ptr_fail ii [::dx] t [:: ey; msf] in
         ok (rmap, ir)
       | _ => Error (stk_error_no_var "only reg ptr can receive the result of protect_ptr")
