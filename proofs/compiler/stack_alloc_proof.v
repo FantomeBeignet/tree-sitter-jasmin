@@ -5546,11 +5546,11 @@ Proof.
   by apply (alloc_call_arg_aux_not_None halloc).
 Qed.
 
-Lemma set_clearP rmap x sr ofs len rmap2 :
-  set_clear rmap x sr ofs len = ok rmap2 ->
+Lemma set_clearP rmap x sr rmap2 :
+  set_clear rmap x sr = ok rmap2 ->
   sr.(sr_region).(r_writable) /\
-  rmap2 = set_clear_pure rmap sr ofs len.
-Proof. by rewrite /set_clear /writable; t_xrbindP=> -> <-. Qed.
+  rmap2 = set_clear_pure rmap sr.
+Proof. by rewrite /set_clear; t_xrbindP=> /check_writableP -> ->. Qed.
 
 Lemma alloc_call_arg_aux_writable rmap0 rmap opi e rmap2 bsr e' :
   alloc_call_arg_aux pmap rmap0 rmap opi e = ok (rmap2, (bsr, e')) ->
@@ -5583,64 +5583,103 @@ Proof.
   by apply (alloc_call_arg_aux_writable halloc).
 Qed.
 
-Lemma incl_bytes_map_refl r bm : incl_bytes_map r bm bm.
+(* FIXME: we prove things about incl. Maybe we should prove sth about another
+predicate Incl with semantic meaning, i.e. parametrized by some [se] and doing
+  inclusions on concrete intervals. *)
+
+Lemma incl_interval_refl : Reflexive incl_interval.
 Proof.
-  apply Mvar.inclP => x.
-  case: Mvar.get => [bytes|//].
-  by apply subset_refl.
+  move=> i.
+  apply /(all_nthP {| ss_ofs := 0; ss_len := 0 |}) => k hk.
+  apply /(has_nthP {| ss_ofs := 0; ss_len := 0 |}).
+  exists k => //.
+  by apply symbolic_slice_beq_refl.
 Qed.
 
-Lemma incl_refl rmap : incl rmap rmap.
+Lemma incl_status_refl : Reflexive incl_status.
 Proof.
+  move=> status.
+  case: status => //= i.
+  by apply incl_interval_refl.
+Qed.
+
+Lemma incl_status_map_refl : Reflexive incl_status_map.
+Proof.
+  move=> sm.
+  apply Mvar.inclP => x.
+  case: Mvar.get => [status|//].
+  by apply incl_status_refl.
+Qed.
+
+Lemma incl_refl : Reflexive incl.
+Proof.
+  move=> rmap.
   apply /andP; split.
   + apply Mvar.inclP => x.
     case: Mvar.get => [sr|//].
-    by apply eq_refl.
+    by apply sub_region_beq_refl.
   apply Mr.inclP => r.
-  case: Mr.get => [bm|//].
-  by apply incl_bytes_map_refl.
+  case: Mr.get => [sm|//].
+  by apply incl_status_map_refl.
 Qed.
 
-Lemma incl_bytes_map_trans r bm1 bm2 bm3 :
-  incl_bytes_map r bm1 bm2 -> incl_bytes_map r bm2 bm3 -> incl_bytes_map r bm1 bm3.
+Lemma incl_interval_trans : Transitive incl_interval.
 Proof.
+  move=> i1 i2 i3 hincl1 hincl2.
+  apply: sub_all hincl1 => s hhas2.
+  have [s' _ /andP [hhas3 heqsub]] := all_has hincl2 hhas2.
+  apply: sub_has hhas3 => s''.
+  by apply (symbolic_slice_beq_trans heqsub).
+Qed.
+
+Lemma incl_status_trans : Transitive incl_status.
+Proof.
+  case=> [||i1] [||i2] [||i3] //= hincl1 hincl2.
+  by apply (incl_interval_trans hincl2 hincl1).
+Qed.
+
+Lemma incl_status_map_trans : Transitive incl_status_map.
+Proof.
+  move=> sm1 sm2 sm3.
   move=> /Mvar.inclP h1 /Mvar.inclP h2.
   apply Mvar.inclP => x.
-  case heq1: Mvar.get => [bytes1|//].
+  case heq1: Mvar.get => [status1|//].
   have := h1 x; rewrite heq1.
-  case heq2: Mvar.get => [bytes2|//] hsubset.
+  case heq2: Mvar.get => [status2|//] hincl.
   have := h2 x; rewrite heq2.
-  case heq3: Mvar.get => [bytes3|//].
-  by apply (subset_trans hsubset).
+  case heq3: Mvar.get => [status3|//].
+  by apply (incl_status_trans hincl).
 Qed.
 
-Lemma incl_trans rmap1 rmap2 rmap3: incl rmap1 rmap2 -> incl rmap2 rmap3 -> incl rmap1 rmap3.
+Lemma incl_trans : Transitive incl.
 Proof.
+  move=> rmap1 rmap2 rmap3.
   move=> /andP [] /Mvar.inclP h12 /Mr.inclP h12'.
   move=> /andP [] /Mvar.inclP h23 /Mr.inclP h23'.
   apply /andP; split.
   + apply Mvar.inclP => x.
     case heq1: Mvar.get => [sr1|//].
     have := h12 x; rewrite heq1.
-    case heq2: Mvar.get => [sr2|//] /eqP ->.
+    case heq2: Mvar.get => [sr2|//] heqsub.
     have := h23 x; rewrite heq2.
-    by apply.
+    case heq3: Mvar.get => [status3|//].
+    by apply (sub_region_beq_trans heqsub).
   apply Mr.inclP => r.
-  case heq1: Mr.get => [bm1|//].
+  case heq1: Mr.get => [sm1|//].
   have := h12' r; rewrite heq1.
-  case heq2: Mr.get => [bm2|//] hincl.
+  case heq2: Mr.get => [sm2|//] hincl.
   have := h23' r; rewrite heq2.
-  case heq3: Mr.get => [bm3|//].
-  by apply (incl_bytes_map_trans hincl).
+  case heq3: Mr.get => [sm3|//].
+  by apply (incl_status_map_trans hincl).
 Qed.
 
-Lemma get_var_bytes_None rv r x :
+Lemma get_var_status_None rv r x :
   Mr.get rv r = None ->
-  get_var_bytes rv r x = ByteSet.empty.
+  get_var_status rv r x = Unknown.
 Proof.
   move=> hget.
-  rewrite /get_var_bytes /get_bytes_map hget /=.
-  by rewrite /get_bytes /empty_bytes_map Mvar.get0.
+  rewrite /get_var_status /get_status_map hget /=.
+  by rewrite /get_status /empty_status_map Mvar.get0.
 Qed.
 
 (* This is not exactly the Prop-version of [incl]. [incl] has the disadvantage
@@ -5651,91 +5690,131 @@ Qed.
 *)
 Definition Incl (rmap1 rmap2 : region_map) :=
   (forall x sr, Mvar.get rmap1.(var_region) x = Some sr -> Mvar.get rmap2.(var_region) x = Some sr) /\
-  (forall r x, ByteSet.subset (get_var_bytes rmap1 r x) (get_var_bytes rmap2 r x)).
+  (forall r x, incl_status (get_var_status rmap1 r x) (get_var_status rmap2 r x)).
 
-Lemma Incl_refl rmap : Incl rmap rmap.
+Lemma Incl_refl : Reflexive Incl.
 Proof.
+  move=> rmap.
   split=> //.
-  by move=> r x; apply subset_refl.
+  by move=> r x; apply incl_status_refl.
 Qed.
 
-Lemma Incl_trans rmap1 rmap2 rmap3 :
-  Incl rmap1 rmap2 -> Incl rmap2 rmap3 -> Incl rmap1 rmap3.
+Lemma Incl_trans : Transitive Incl.
 Proof.
-  move=> [hincl1 hsub1] [hincl2 hsub2]; split.
-  + by move=> x sr /hincl1 /hincl2.
-  by move=> r x; apply (subset_trans (hsub1 r x) (hsub2 r x)).
+  move=> rmap1 rmap2 rmap3.
+  move=> [hincl11 hincl12] [hincl21 hincl22]; split.
+  + by move=> x sr /hincl11 /hincl21.
+  by move=> r x; apply (incl_status_trans (hincl12 r x) (hincl22 r x)).
 Qed.
 
-Lemma Incl_check_gvalid rmap1 rmap2 x sr bytes :
+Lemma Incl_check_gvalid rmap1 rmap2 x sr status :
   Incl rmap1 rmap2 ->
-  check_gvalid rmap1 x = Some (sr, bytes) ->
-  exists bytes2,
-  check_gvalid rmap2 x = Some (sr, bytes2) /\ ByteSet.subset bytes bytes2.
+  check_gvalid rmap1 x = Some (sr, status) ->
+  exists status2,
+    check_gvalid rmap2 x = Some (sr, status2) /\ incl_status status status2.
 Proof.
-  move=> [hincl hsub].
+  move=> [hincl1 hincl2].
   rewrite /check_gvalid.
   case: is_glob.
   + move=> ->.
-    exists bytes; split=> //.
-    by apply subset_refl.
+    exists status; split=> //.
+    by apply incl_status_refl.
   case heq1: Mvar.get=> [sr'|//] [? <-]; subst sr'.
-  rewrite (hincl _ _ heq1).
+  rewrite (hincl1 _ _ heq1).
   eexists; split; first by reflexivity.
-  by apply hsub.
+  by apply hincl2.
 Qed.
 
 Lemma incl_var_region rmap1 rmap2 x sr :
   incl rmap1 rmap2 ->
   Mvar.get rmap1.(var_region) x = Some sr ->
-  Mvar.get rmap2.(var_region) x = Some sr.
+  exists2 sr2, Mvar.get rmap2.(var_region) x = Some sr2 & sub_region_beq sr sr2.
 Proof.
   move=> /andP [hincl _] hget1.
   have /Mvar.inclP -/(_ x) := hincl.
   rewrite hget1.
-  by case: Mvar.get => // _ /eqP <-.
+  case: Mvar.get => [sr2|//] heqsub.
+  by exists sr2.
 Qed.
 
-Lemma incl_get_var_bytes rmap1 rmap2 r x :
+Lemma incl_get_var_status rmap1 rmap2 r x :
   incl rmap1 rmap2 ->
-  ByteSet.subset (get_var_bytes rmap1 r x) (get_var_bytes rmap2 r x).
+  incl_status (get_var_status rmap1 r x) (get_var_status rmap2 r x).
 Proof.
   move=> /andP [] _ /Mr.inclP /(_ r).
-  rewrite /get_var_bytes /get_bytes_map /get_bytes.
-  case: Mr.get => [bm1|_]; last by apply (subset_is_empty _ is_empty_empty).
-  case: Mr.get => [bm2|//].
+  rewrite /get_var_status /get_status_map /get_status.
+  case: Mr.get => [sm1|//].
+  case: Mr.get => [sm2|//].
   move=> /Mvar.inclP /(_ x).
-  case: Mvar.get => [bytes1|_]; last by apply (subset_is_empty _ is_empty_empty).
-  by case: Mvar.get => [bytes2|//].
+  case: Mvar.get => [status1|//].
+  by case: Mvar.get => [status2|//].
 Qed.
 
-Lemma incl_check_gvalid rmap1 rmap2 x sr bytes :
+(* we use sub_region_beq sr sr2 -> sr.(sr_region) = sr2.(sr_region) *)
+Lemma incl_check_gvalid rmap1 rmap2 x sr status :
   incl rmap1 rmap2 ->
-  check_gvalid rmap1 x = Some (sr, bytes) ->
-  exists bytes2,
-  check_gvalid rmap2 x = Some (sr, bytes2) /\ ByteSet.subset bytes bytes2.
+  check_gvalid rmap1 x = Some (sr, status) ->
+  exists sr2 status2, [/\
+    check_gvalid rmap2 x = Some (sr2, status2),
+    sub_region_beq sr sr2 &
+    incl_status status status2].
 Proof.
   move=> hincl.
   rewrite /check_gvalid.
   case: is_glob.
   + move=> ->.
-    exists bytes; split=> //.
-    by apply subset_refl.
+    exists sr, status; split=> //.
+    + by apply sub_region_beq_refl.
+    by apply incl_status_refl.
   case heq1: Mvar.get=> [sr'|//] [? <-]; subst sr'.
-  rewrite (incl_var_region hincl heq1).
-  eexists; split; first by reflexivity.
-  apply: incl_get_var_bytes hincl.
+  have [sr2 -> heqsub] := incl_var_region hincl heq1.
+  eexists _, _; (split; first by reflexivity) => //.
+  case/andP: heqsub => /eqP <- _.
+  by apply: incl_get_var_status hincl.
 Qed.
 
-Lemma wf_rmap_incl rmap1 rmap2 s1 s2 :
+Lemma sub_region_beq_wf sr1 sr2 se ty :
+  sub_region_beq sr1 sr2 ->
+  wf_sub_region se sr2 ty ->
+  wf_sub_region se sr1 ty.
+Proof.
+  move=> /andP [/eqP heqr heqz] [hwfr hwfz].
+  split; rewrite heqr //.
+  case: hwfz => cs ok_cs wf_cs.
+  exists cs => //.
+  by rewrite (symbolic_zone_beq_sem_zone se heqz).
+Qed.
+
+Lemma incl_interval_wf i1 i2 se :
+  incl_interval i1 i2 ->
+  wf_interval se i2 ->
+  wf_interval se i1.
+Proof.
+  
+
+Lemma incl_status_wf status1 status2 se :
+  incl_status status1 status2 ->
+  wf_status se status2 ->
+  wf_status se status1.
+Proof.
+  case: status1 status2 => [||i1] [||i2] //=.
+  move=> hincl.
+  
+
+
+Lemma wf_rmap_incl rmap1 rmap2 se s1 s2 :
   incl rmap1 rmap2 ->
-  wf_rmap rmap2 s1 s2 ->
-  wf_rmap rmap1 s1 s2.
+  wf_rmap rmap2 se s1 s2 ->
+  wf_rmap rmap1 se s1 s2.
 Proof.
   move=> hincl hwfr.
-  case: (hwfr) => hwfsr hval hptr; split.
-  + move=> x sr /(incl_var_region hincl).
+  case: (hwfr) => hwfsr hwfst hval hptr; split.
+  + move=> x sr /(incl_var_region hincl) [sr2 hsr2 heqsub].
+    apply (sub_region_beq_wf heqsub).
     by apply hwfsr.
+  + move /wfr_STATUS_alt in hwfst; apply wfr_STATUS_alt.
+    move=> r x.
+    have := incl_get_var_status
   + move=> x sr bytes v /(incl_check_gvalid hincl) [bytes2 [hgvalid2 hsubset]] hget.
     have [hread hty] := hval _ _ _ _ hgvalid2 hget.
     split=> //.
