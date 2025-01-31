@@ -1265,28 +1265,15 @@ Definition alloc_protect_ptr rmap ii r t e msf :=
   | _ => Error (stk_ierror_no_var "alloc_array_move: variable/subarray expected (x)")
   end.
 
-(* We do not update the [var_region] part *)
-(* there seems to be an invariant: all Pdirect are in the rmap *)
-(* long-term TODO: we can avoid putting PDirect in the rmap (look in pmap instead) *)
+(* invariant: all local Pdirect are in the rmap *)
+(* With set_move, we needlessly update the var_region part of rmap
+   with "x -> sr", which is already true.
+   But this allows to reuse set_move and its proof. *)
 Definition alloc_array_move_init table rmap r tag e :=
   if is_array_init e then
     match r with
     | Lvar x =>
-      Let sr :=
-        match get_local x with
-        | None    => Error (stk_ierror_basic x "register array remains")
-        | Some pk =>
-          match pk with
-          | Pdirect x' _ ws cs sc =>
-            if sc is Slocal then
-              ok (sub_region_stack x' ws cs)
-            else
-              Error (stk_error x (pp_box [:: pp_s "cannot initialize glob array"; pp_var x]))
-          | _ =>
-            get_sub_region rmap x
-          end
-        end
-      in
+      Let sr := get_sub_region rmap x in
       let rmap := set_move rmap x sr Valid in
       ok (table, rmap, nop)
     | _ => Error (stk_ierror_no_var "arrayinit of non-variable")

@@ -5410,13 +5410,16 @@ Proof.
   by rewrite /= with_vm_idem.
 Qed.
 
-Lemma alloc_array_move_initP m0 s1 s2 s1' rmap1 rmap2 r tag e v v' n i2 :
-  valid_state rmap1 m0 s1 s2 ->
+Lemma alloc_array_move_initP se m0 s1 s2 s1' table1 table2 rmap1 rmap2 r tag e v v' n i2 :
+  valid_state table1 rmap1 se m0 s1 s2 ->
   sem_pexpr true gd s1 e = ok v ->
   truncate_val (sarr n) v = ok v' ->
   write_lval true gd r v' s1 = ok s1' ->
-  alloc_array_move_init saparams pmap rmap1 r tag e = ok (rmap2, i2) →
-  ∃ s2' : estate, sem_i P' rip s2 i2 s2' ∧ valid_state rmap2 m0 s1' s2'.
+  alloc_array_move_init saparams fresh_var_ident string_of_sr pmap table1 rmap1 r tag e = ok (table2, rmap2, i2) →
+  ∃ (s2' : estate) vme, [/\
+    sem_i P' rip s2 i2 s2',
+    valid_state (remove_binding_lval table2 r) rmap2 (with_vm se vme) m0 s1' s2' &
+    se.(evm) <=1 vme].
 Proof.
   move=> hvs.
   rewrite /alloc_array_move_init.
@@ -5424,25 +5427,19 @@ Proof.
   + by move=> _; apply alloc_array_moveP.
   move=> [m ->] /= [<-].
   rewrite /truncate_val /=.
-  t_xrbindP=> _ /WArray.cast_empty_ok -> {m} <- hw [x ofsx] hgetr.
-  case hofsx: (match ofsx with
-               | Some p => p
-               | None => (0, size_slot x)
-               end) => [ofs len].
-  case hlx: get_local => [pk|//].
-  t_xrbindP=> sr hsr <- <-.
-  exists s2; split; first by constructor.
+  t_xrbindP=> _ /WArray.cast_empty_ok -> {m} <-.
+  case: r => //=.
+  t_xrbindP=> x /write_varP [-> _ htr] srx /get_sub_regionP hsrx <- <- <-.
+  exists s2, se.(evm); split=> //; first by constructor.
   (* valid_state update *)
-  apply (valid_state_set_move_sub_write_lval hvs hgetr hofsx hw hlx).
-  + move=> srx hgetx.
-    case: pk hlx hsr.
-    + move=> s ofs' ws z [] // hlx [<-].
-      have /wfr_ptr := hgetx.
-      by rewrite hlx => -[_ [[<-] ->]].
-    + by move=> _ _ /get_sub_regionP; congruence.
-    by move=> _ _ _ _ _ _ /get_sub_regionP; congruence.
-  + by apply subset_refl.
-  move=> off hmem w /=.
+  rewrite with_vm_same.
+  have /wfr_wf hwfx := hsrx.
+  have /wfr_ptr [pkx [hlx hpkx]] := hsrx.
+  have hgvalidx := check_gvalid_lvar hsrx.
+  have /= hwfsx := [elaborate check_gvalid_wf_status wfr_status hgvalidx].
+  apply: (valid_state_set_move hvs hwfx _ hlx hpkx htr) => //.
+  have /vm_truncate_valE [-> ->] := htr.
+  split=> //= off addr w _ _ /=.
   by rewrite WArray.get_empty; case: ifP.
 Qed.
 
