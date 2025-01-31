@@ -5347,87 +5347,67 @@ Lemma get_regptrP x p :
   Mvar.get pmap.(locals) x = Some (Pregptr p).
 Proof. by rewrite /get_regptr; case heq: get_local => [[]|] // [<-]. Qed.
 
-Lemma alloc_array_swapP m0 s1 s2 s1' rmap1 rmap2 n xs tag es va vs i2: 
-  valid_state rmap1 m0 s1 s2 ->
+Lemma alloc_array_swapP table m0 se s1 s2 s1' rmap1 rmap2 n xs tag es va vs i2:
+  valid_state table rmap1 se m0 s1 s2 ->
   sem_pexprs true gd s1 es = ok va -> 
   exec_sopn (Opseudo_op (pseudo_operator.Oswap (sarr n))) va = ok vs -> 
   write_lvals true gd s1 xs vs = ok s1' -> 
   alloc_array_swap saparams pmap rmap1 xs tag es = ok (rmap2, i2) ->
-  ∃ s2' : estate, sem_i P' rip s2 i2 s2' ∧ valid_state rmap2 m0 s1' s2'.
+  ∃ s2' : estate, sem_i P' rip s2 i2 s2' ∧ valid_state (foldl remove_binding_lval table xs) rmap2 se m0 s1' s2'.
 Proof.
+  move=> hvs.
   rewrite /alloc_array_swap.
   case: xs => // -[] // x [] // [] // y [] //.
-  case: es => // -[] // z [] // [] // w [] //= hvs.
+  case: es => // -[] // z [] // [] // w [] //=.
   t_xrbindP => vz hz _ vw hw <- <-.
   rewrite /exec_sopn /= /sopn_sem /= /swap_semi; t_xrbindP.
   move=> _ tz /to_arrI hvz tw /to_arrI hvw <- <- /=; t_xrbindP; subst vz vw.
-  move=> _ /write_varP [-> _ /vm_truncate_valE [hxty hxtr]].
-  move=> _ /write_varP [-> _ /vm_truncate_valE [hyty hytr]].
+  move=> _ /write_varP [-> _ /[dup] hxtr /vm_truncate_valE [hxty hxtr']].
+  move=> _ /write_varP [-> _ /[dup] hytr /vm_truncate_valE [hyty hytr']].
   rewrite with_vm_idem /= => ?; subst s1'.
-  move=> pz /get_regptrP hpz [[srz srz_] _] /get_sub_region_bytesP [zbytes [gvalidz ? ->]]; subst srz_.
+  move=> pz /get_regptrP hpz [srz _] /get_sub_region_statusP [hsrz ->].
   t_xrbindP.
-  move=> pw /get_regptrP hpw [[srw srw_] _] /get_sub_region_bytesP [wbytes [gvalidw ? ->]]; subst srw_.
+  move=> pw /get_regptrP hpw [srw _] /get_sub_region_statusP [hsrw ->].
   t_xrbindP.
   move=> px /get_regptrP hpx py /get_regptrP hpy /andP [xloc yloc] <- <-.
-  have hwty := type_of_get_gvar_array hw.
-  rewrite hwty -hxty.
-  set rmap1' := set_move rmap1 _ _ _.
-  have : valid_state rmap1' m0
-         (with_vm s1 (evm s1).[x <- Varr tw])
-         (with_vm s2 (evm s2).[px <- Vword (sub_region_addr (sub_region_at_ofs srw (Some 0) (size_slot x)))]).
-  + have /= hwfw := [elaborate check_gvalid_wf wfr_wf gvalidw].
-    have htrx : truncatable true (vtype x) (Varr tw) by rewrite hxty.
-    rewrite hwty -hxty in hwfw.
-    apply (valid_state_set_move_regptr (ptr_prop _ hpx) hvs (sub_region_at_ofs_0_wf hwfw) hpx htrx).
-    rewrite /set_move /= get_var_bytes_set_move_bytes eqxx /= eqxx /=.
-    rewrite hxty eqxx; split => //.
-    move=> off hmem ww /[dup] /get_val_byte_bound /= hoff hget.
-    have /(_ _ _ _ _ hvs _ _ _ _ gvalidw) := vs_wf_region.(wfr_val).
-    rewrite get_gvar_nglob in hw => //; last by rewrite -is_lvar_is_glob.
-    rewrite get_gvar_nglob // => /(_ _ hw) [+ _].
-    rewrite -sub_region_addr_offset wrepr0 GRing.addr0; apply => //.
-    move: hmem; rewrite ByteSet.unionE.
-    case/orP.
-    + by rewrite ByteSet.removeE /I.memi /= !zify; lia.
-    by rewrite ByteSet.interE /= Z.add_0_r => /andP [+ _].
-  set s1' := with_vm s1 _.
-  set s2' := with_vm s2 _ => hvs'.
+
   have hzty := type_of_get_gvar_array hz.
-  rewrite hzty -hyty.
-  set rmap1'' := set_move rmap1' _ _ _.
-  have hvs'' : valid_state rmap1'' m0
-         (with_vm s1' (evm s1').[y <- Varr tz])
-         (with_vm s2' (evm s2').[py <- Vword (sub_region_addr (sub_region_at_ofs srz (Some 0) (size_slot y)))]).
-  + have /= hwfz := [elaborate check_gvalid_wf wfr_wf gvalidz].
-    have htry : truncatable true (vtype y) (Varr tz) by rewrite hyty.
-    rewrite hzty -hyty in hwfz.
-    apply (valid_state_set_move_regptr (ptr_prop _ hpy) hvs' (sub_region_at_ofs_0_wf hwfz) hpy htry).
-    rewrite /set_move /= get_var_bytes_set_move_bytes eqxx /= eqxx /=.
-    rewrite hyty eqxx; split => //.
-    move=> off hmem ww /[dup] /get_val_byte_bound /= hoff hget.
-    have /(_ _ _ _ _ hvs _ _ _ _ gvalidz) := vs_wf_region.(wfr_val).
-    rewrite get_gvar_nglob in hz => //; last by rewrite -is_lvar_is_glob.
-    rewrite get_gvar_nglob // => /(_ _ hz) [+ _]. 
-    rewrite -sub_region_addr_offset wrepr0 GRing.addr0; apply => //.
-    move: hmem; rewrite ByteSet.unionE.
-    case/orP.
-    + by rewrite ByteSet.removeE /I.memi /= !zify; lia.
-    by rewrite ByteSet.interE /= Z.add_0_r => /andP [+ _].
-  eexists; split; last eauto.  
-  rewrite /s2' with_vm_idem /=.
-  rewrite -!sub_region_addr_offset !wrepr0 !GRing.addr0.
-  have h1 := hvs.(vs_wf_region).(wfr_ptr) _.
-  move: gvalidw; rewrite /check_gvalid /=.
-  case heq1 : Mvar.get => [ sr | //] [? _]; subst sr.
-  have := h1 _ _ heq1; rewrite /get_local hpw => -[_ [[<-]]].
-  move: gvalidz; rewrite /check_gvalid /=.
-  case heq2 : Mvar.get => [ sr | //] [? _]; subst sr.
-  have := h1 _ _ heq2; rewrite /get_local hpz => -[_ [[<-]]] /=.
-  apply: hsaparams.(sap_swapP). 
-  + by apply: (wf_locals hpx).(wfr_rtype).
-  + by apply: (wf_locals hpy).(wfr_rtype).
-  + by apply: (wf_locals hpz).(wfr_rtype).
-  by apply: (wf_locals hpw).(wfr_rtype).
+  have /wfr_wf hwfz := hsrz.
+  have [csz ok_csz _] := hwfz.(wfsr_zone).
+  have [addrz ok_addrz _] := wunsigned_sub_region_addr hwfz ok_csz.
+  have := check_gvalid_lvar hsrz;
+    (rewrite mk_lvar_nglob; last by apply /negP; rewrite -is_lvar_is_glob) => hgvalidz.
+  have hwfsz := [elaborate check_gvalid_wf_status wfr_status hgvalidz].
+  have /wfr_ptr := hsrz; rewrite /get_local hpz => -[_ [[<-] /= hpkz]].
+  assert (heqvalz := wfr_val hgvalidz hz).
+  rewrite hzty -hyty in hwfz.
+  rewrite hzty -hyty -hytr' in heqvalz.
+
+  have hwty := type_of_get_gvar_array hw.
+  have /wfr_wf hwfw := hsrw.
+  have [csw ok_csw _] := hwfw.(wfsr_zone).
+  have [addrw ok_addrw _] := wunsigned_sub_region_addr hwfw ok_csw.
+  have := check_gvalid_lvar hsrw;
+    (rewrite mk_lvar_nglob; last by apply /negP; rewrite -is_lvar_is_glob) => hgvalidw.
+  have hwfsw := [elaborate check_gvalid_wf_status wfr_status hgvalidw].
+  have /wfr_ptr := hsrw; rewrite /get_local hpw => -[_ [[<-] /= hpkw]].
+  assert (heqvalw := wfr_val hgvalidw hw).
+  rewrite hwty -hxty in hwfw.
+  rewrite hwty -hxty -hxtr' in heqvalw.
+
+  set s2' := with_vm s2 (evm s2).[px <- Vword addrw].
+  set s2'' := with_vm s2' (evm s2').[py <- Vword addrz].
+  exists s2''; split.
+  + apply: hsaparams.(sap_swapP).
+    + by apply: (wf_locals hpx).(wfr_rtype).
+    + by apply: (wf_locals hpy).(wfr_rtype).
+    + by apply: (wf_locals hpz).(wfr_rtype).
+    + by apply: (wf_locals hpw).(wfr_rtype).
+    + by apply (hpkz _ ok_addrz).
+    by apply (hpkw _ ok_addrw).
+  have hvs' := valid_state_set_move_regptr hvs hwfw ok_addrw hwfsw hpx hxtr heqvalw.
+  have := valid_state_set_move_regptr hvs' hwfz ok_addrz hwfsz hpy hytr heqvalz.
+  by rewrite /= with_vm_idem.
 Qed.
 
 Lemma alloc_array_move_initP m0 s1 s2 s1' rmap1 rmap2 r tag e v v' n i2 :
