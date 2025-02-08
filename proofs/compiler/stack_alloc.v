@@ -140,16 +140,8 @@ Definition symbolic_slice_beq s1 s2 :=
 *)
 Definition symbolic_zone := seq symbolic_slice.
 
-(* TODO: pick this definition in a library instead *)
-Fixpoint list_beq {A} (eqb : A -> A -> bool) (l1 l2 : list A) :=
-  match l1, l2 with
-  | [::], [::] => true
-  | a1 :: l1, a2 :: l2 => eqb a1 a2 && list_beq eqb l1 l2
-  | _, _ => false
-  end.
-
 Definition symbolic_zone_beq :=
-  list_beq symbolic_slice_beq.
+  all2 symbolic_slice_beq.
 
 
 (* ------------------------------------------------------------------ *)

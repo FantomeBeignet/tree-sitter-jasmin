@@ -5689,13 +5689,16 @@ Qed.
    [check_valid], [valid_state]). [Incl] avoids this pitfall.
 *)
 Definition Incl (rmap1 rmap2 : region_map) :=
-  (forall x sr, Mvar.get rmap1.(var_region) x = Some sr -> Mvar.get rmap2.(var_region) x = Some sr) /\
+  (forall x sr, Mvar.get rmap1.(var_region) x = Some sr ->
+    exists2 sr2, Mvar.get rmap2.(var_region) x = Some sr2 & sub_region_beq sr sr2) /\
   (forall r x, incl_status (get_var_status rmap1 r x) (get_var_status rmap2 r x)).
 
 Lemma Incl_refl : Reflexive Incl.
 Proof.
   move=> rmap.
-  split=> //.
+  split.
+  + move=> x sr hsr; exists sr=> //.
+    by apply sub_region_beq_refl.
   by move=> r x; apply incl_status_refl.
 Qed.
 
@@ -5703,25 +5706,32 @@ Lemma Incl_trans : Transitive Incl.
 Proof.
   move=> rmap1 rmap2 rmap3.
   move=> [hincl11 hincl12] [hincl21 hincl22]; split.
-  + by move=> x sr /hincl11 /hincl21.
+  + move=> x sr1 /hincl11 [sr2 /hincl21 [sr3 hsr3 heqsub2] heqsub1].
+    exists sr3 => //.
+    apply (sub_region_beq_trans heqsub1 heqsub2).
   by move=> r x; apply (incl_status_trans (hincl12 r x) (hincl22 r x)).
 Qed.
 
+(* we use sub_region_beq sr sr2 -> sr.(sr_region) = sr2.(sr_region) *)
 Lemma Incl_check_gvalid rmap1 rmap2 x sr status :
   Incl rmap1 rmap2 ->
   check_gvalid rmap1 x = Some (sr, status) ->
-  exists status2,
-    check_gvalid rmap2 x = Some (sr, status2) /\ incl_status status status2.
+  exists sr2 status2, [/\
+    check_gvalid rmap2 x = Some (sr2, status2),
+    sub_region_beq sr sr2 &
+    incl_status status status2].
 Proof.
   move=> [hincl1 hincl2].
   rewrite /check_gvalid.
   case: is_glob.
   + move=> ->.
-    exists status; split=> //.
+    exists sr, status; split=> //.
+    + by apply sub_region_beq_refl.
     by apply incl_status_refl.
   case heq1: Mvar.get=> [sr'|//] [? <-]; subst sr'.
-  rewrite (hincl1 _ _ heq1).
-  eexists; split; first by reflexivity.
+  have [sr2 -> heqsub] := hincl1 _ _ heq1.
+  eexists _, _; (split; first by reflexivity) => //.
+  move: heqsub => /andP [/eqP <- _].
   by apply hincl2.
 Qed.
 
@@ -5785,13 +5795,15 @@ Proof.
   by rewrite (symbolic_zone_beq_sem_zone se heqz).
 Qed.
 
+(* true
 Lemma incl_interval_wf i1 i2 se :
   incl_interval i1 i2 ->
   wf_interval se i2 ->
   wf_interval se i1.
 Proof.
-  
+Admitted.
 
+not true
 Lemma incl_status_wf status1 status2 se :
   incl_status status1 status2 ->
   wf_status se status2 ->
@@ -5799,108 +5811,271 @@ Lemma incl_status_wf status1 status2 se :
 Proof.
   case: status1 status2 => [||i1] [||i2] //=.
   move=> hincl.
-  
+*)
 
+Lemma incl_intervalP i1 i2 se off :
+  incl_interval i1 i2 ->
+  wf_interval se i2 ->
+  valid_offset_interval se i2 off ->
+  valid_offset_interval se i1 off.
+Proof.
+  move=> hincl [ci2 [ok_ci2 _ _]] /(_ ci2 ok_ci2) off_valid2 ci1 ok_ci1 off_valid1.
+  move: off_valid1 => /(has_nthP {| cs_ofs := 0; cs_len := 0 |}) [k1 hk1' off_in1].
+  have := hk1'; rewrite -(size_mapM ok_ci1) => hk1.
+  move: hincl => /(all_nthP {| ss_ofs := 0; ss_len := 0 |}) /(_ k1 hk1).
+  move=> /(has_nthP {| ss_ofs := 0; ss_len := 0 |}) [k2 hk2 heqsub].
+  have := hk2; rewrite (size_mapM ok_ci2) => hk2'.
+  apply /off_valid2 /(has_nthP {| cs_ofs := 0; cs_len := 0 |}).
+  exists k2 => //.
+  have := mapM_nth {| ss_ofs := 0; ss_len := 0 |} {| cs_ofs := 0; cs_len := 0 |} ok_ci1 hk1.
+  have := mapM_nth {| ss_ofs := 0; ss_len := 0 |} {| cs_ofs := 0; cs_len := 0 |} ok_ci2 hk2.
+  rewrite -(symbolic_slice_beqP _ heqsub).
+  by congruence.
+Qed.
+
+Lemma incl_statusP status1 status2 se off :
+  incl_status status1 status2 ->
+  wf_status se status1 ->
+  valid_offset se status1 off ->
+  valid_offset se status2 off.
+Proof.
+  case: status1 status2 => [||i1] [||i2] //=.
+  by apply incl_intervalP.
+Qed.
+
+Lemma sub_region_beq_valid_pk sr1 sr2 rv se s2 pk :
+  sub_region_beq sr1 sr2 ->
+  valid_pk rv se s2 sr1 pk ->
+  valid_pk rv se s2 sr2 pk.
+Proof.
+  move=> heqsub.
+  case: pk.
+  + move=> s ofs ws cs sc /=.
+    by apply (sub_region_beq_trans (sub_region_beq_sym heqsub)).
+  + move=> p /= hpk addr haddr; apply hpk.
+    by rewrite (sub_region_beq_addr se heqsub).
+  move=> s ofs ws cs f /= hpk hcheck paddr addr hpaddr haddr.
+  apply (hpk hcheck paddr addr hpaddr).
+  by rewrite (sub_region_beq_addr se heqsub).
+Qed.
 
 Lemma wf_rmap_incl rmap1 rmap2 se s1 s2 :
   incl rmap1 rmap2 ->
+  wfr_STATUS rmap1 se ->
   wf_rmap rmap2 se s1 s2 ->
   wf_rmap rmap1 se s1 s2.
 Proof.
-  move=> hincl hwfr.
-  case: (hwfr) => hwfsr hwfst hval hptr; split.
-  + move=> x sr /(incl_var_region hincl) [sr2 hsr2 heqsub].
+  move=> hincl hwfst1 hwfr2.
+  case: (hwfr2) => hwfsr2 hwfst2 hval2 hptr2; split=> //.
+  + move=> x sr1 /(incl_var_region hincl) [sr2 hsr2 heqsub].
     apply (sub_region_beq_wf heqsub).
-    by apply hwfsr.
-  + move /wfr_STATUS_alt in hwfst; apply wfr_STATUS_alt.
-    move=> r x.
-    have := incl_get_var_status
-  + move=> x sr bytes v /(incl_check_gvalid hincl) [bytes2 [hgvalid2 hsubset]] hget.
-    have [hread hty] := hval _ _ _ _ hgvalid2 hget.
+    by apply hwfsr2.
+  + move=> x sr1 status1 v hgvalid1 hget.
+    have [sr2 [status2 [hgvalid2 heqsub {}hincl]]] :=
+      incl_check_gvalid hincl hgvalid1.
+    apply (sub_region_beq_eq_sub_region_val (sub_region_beq_sym heqsub)).
+    have [hread2 hty2] := hval2 _ _ _ _ hgvalid2 hget.
     split=> //.
-    move=> off hmem.
-    apply hread.
-    by apply: ByteSet.subsetP hmem.
-  move=> x sr /(incl_var_region hincl) /hptr [pk [hlx hpk]].
+    move=> off addr w haddr off_valid.
+    apply hread2 => //.
+    have /= hwfs1 := check_gvalid_wf_status hwfst1 hgvalid1.
+    by apply (incl_statusP hincl hwfs1 off_valid).
+  move=> x sr1 /(incl_var_region hincl) [sr2 /hptr2 [pk [hlx hpk2]] heqsub].
   exists pk; split=> //.
-  case: pk hlx hpk => //= sl ofs ws z f hlx hpk hstkptr.
+  apply (sub_region_beq_valid_pk (sub_region_beq_sym heqsub)).
+  case: pk hlx hpk2 => //= sl ofs ws cs f hlx hpk hstkptr.
   apply hpk.
-  by apply (mem_incl_l (incl_get_var_bytes _ _ hincl)).
+  have := incl_get_var_status (sub_region_stkptr sl ws cs).(sr_region) f hincl.
+  move: hstkptr; rewrite /check_stack_ptr.
+  move=> /is_validP ->.
+  by case: get_var_status.
 Qed.
 
-Lemma valid_state_incl rmap1 rmap2 m0 s s' :
+Lemma valid_state_incl rmap1 rmap2 se table m0 s s' :
   incl rmap1 rmap2 ->
-  valid_state rmap2 m0 s s' ->
-  valid_state rmap1 m0 s s'.
+  wfr_STATUS rmap1 se ->
+  valid_state table rmap2 se m0 s s' ->
+  valid_state table rmap1 se m0 s s'.
 Proof.
-  move=> hincl hvs.
-  case:(hvs) => hscs hvalid hdisj hvincl hvincl2 hunch hrip hrsp heqvm hwfr heqmem hglobv htop.
+  move=> hincl hwfst hvs.
+  case:(hvs) => hscs hvalid hdisj hincl' hincl2 hunch hrip hrsp heqvm hwft' hwfr heqmem hglobv htop.
   constructor=> //.
-  by apply (wf_rmap_incl hincl hwfr).
+  by apply (wf_rmap_incl hincl hwfst hwfr).
 Qed.
 
 Lemma incl_Incl rmap1 rmap2 : incl rmap1 rmap2 -> Incl rmap1 rmap2.
 Proof.
   move=> hincl; split.
   + by move=> x sr; apply (incl_var_region hincl).
-  by move=> r x; apply (incl_get_var_bytes _ _ hincl).
+  by move=> r x; apply (incl_get_var_status _ _ hincl).
 Qed.
 
-Lemma wf_rmap_Incl rmap1 rmap2 s1 s2 :
+Lemma wf_rmap_Incl rmap1 rmap2 se s1 s2 :
   Incl rmap1 rmap2 ->
-  wf_rmap rmap2 s1 s2 ->
-  wf_rmap rmap1 s1 s2.
+  wfr_STATUS rmap1 se ->
+  wf_rmap rmap2 se s1 s2 ->
+  wf_rmap rmap1 se s1 s2.
 Proof.
-  move=> /[dup] hincl [hinclr hsub] hwfr.
-  case: (hwfr) => hwfsr hval hptr; split.
-  + move=> x sr /hinclr.
-    by apply hwfsr.
-  + move=> x sr bytes v /(Incl_check_gvalid hincl) [bytes2 [hgvalid2 hsubset]] hget.
-    have [hread hty] := hval _ _ _ _ hgvalid2 hget.
+  move=> /[dup] hincl [hinclr hincls] hwfst1 hwfr2.
+  case: (hwfr2) => hwfsr2 hwfst2 hval2 hptr2; split=> //.
+  + move=> x sr1 /hinclr [sr2 hsr2 heqsub].
+    apply (sub_region_beq_wf heqsub).
+    by apply hwfsr2.
+  + move=> x sr1 status1 v hgvalid1 hget.
+    have [sr2 [status2 [hgvalid2 heqsub {}hincl]]] :=
+      Incl_check_gvalid hincl hgvalid1.
+    apply (sub_region_beq_eq_sub_region_val (sub_region_beq_sym heqsub)).
+    have [hread2 hty2] := hval2 _ _ _ _ hgvalid2 hget.
     split=> //.
-    move=> off hmem.
-    apply hread.
-    by apply: ByteSet.subsetP hmem.
-  move=> x sr /(proj1 hincl) /hptr [pk [hlx hpk]].
+    move=> off addr w haddr off_valid.
+    apply hread2 => //.
+    have /= hwfs1 := check_gvalid_wf_status hwfst1 hgvalid1.
+    by apply (incl_statusP hincl hwfs1 off_valid).
+  move=> x sr1 /hinclr [sr2 /hptr2 [pk [hlx hpk2]] heqsub].
   exists pk; split=> //.
-  case: pk hlx hpk => //= sl ofs ws z f hlx hpk hstkptr.
+  apply (sub_region_beq_valid_pk (sub_region_beq_sym heqsub)).
+  case: pk hlx hpk2 => //= sl ofs ws cs f hlx hpk hstkptr.
   apply hpk.
-  by apply (mem_incl_l (hsub _ _)).
+  have := hincls (sub_region_stkptr sl ws cs).(sr_region) f.
+  move: hstkptr; rewrite /check_stack_ptr.
+  move=> /is_validP ->.
+  by case: get_var_status.
 Qed.
 
-Lemma valid_state_Incl rmap1 rmap2 m0 s s' :
+Lemma valid_state_Incl rmap1 rmap2 se table m0 s s' :
   Incl rmap1 rmap2 ->
-  valid_state rmap2 m0 s s' ->
-  valid_state rmap1 m0 s s'.
+  wfr_STATUS rmap1 se ->
+  valid_state table rmap2 se m0 s s' ->
+  valid_state table rmap1 se m0 s s'.
 Proof.
-  move=> hincl hvs.
-  case:(hvs) => hscs hvalid hdisj hvincl hvincl2 hunch hrip hrsp heqvm hwfr heqmem hglobv htop.
+  move=> hincl hwfst hvs.
+  case:(hvs) => hscs hvalid hdisj hincl' hincl2 hunch hrip hrsp heqvm hwft' hwfr heqmem hglobv htop.
   constructor=> //.
-  by apply (wf_rmap_Incl hincl hwfr).
+  by apply (wf_rmap_Incl hincl hwfst hwfr).
 Qed.
 
-Lemma incl_bytes_map_merge_bytes_l r bm1 bm2 :
-  incl_bytes_map r (Mvar.map2 merge_bytes bm1 bm2) bm1.
+Lemma incl_merge_interval i1 i2 i2' i i' :
+  incl_interval i2 i2' ->
+  merge_interval i1 i2 = Some i ->
+  merge_interval i1 i2' = Some i' ->
+  incl_interval i i'.
+Proof.
+  move=> hincl.
+  rewrite /merge_interval.
+Admitted.
+
+Lemma incl_interval_cons s i :
+  incl_interval i (s :: i).
+Proof.
+  rewrite /incl_interval.
+  apply /(all_nthP {| ss_ofs := 0; ss_len := 0 |}).
+  move=> k hk /=.
+  apply /orP; right.
+  apply /(has_nthP {| ss_ofs := 0; ss_len := 0 |}).
+  exists k => //.
+  by apply symbolic_slice_beq_refl.
+Qed.
+
+(* We could probably deduce add_sub_interval_1/_2 from this lemma *)
+Lemma add_sub_interval_incl_l i1 s i2 :
+  add_sub_interval i1 s = Some i2 ->
+  incl_interval i1 i2.
+Proof.
+  elim: i1 i2 => [//|s1 i1 ih1] i2 /=.
+  case: symbolic_slice_beq.
+  + move=> [<-] /=.
+    rewrite symbolic_slice_beq_refl /=.
+    by apply incl_interval_cons.
+  case: (odflt _ _).
+  + move=> [<-] /=.
+    rewrite symbolic_slice_beq_refl /= orbT /=.
+    apply: incl_interval_trans (incl_interval_cons _ _).
+    by apply incl_interval_cons.
+  case: (odflt _ _) => //.
+  apply: obindP => {}i2 hadd [<-].
+  rewrite /= symbolic_slice_beq_refl /=.
+  apply (incl_interval_trans (ih1 _ hadd)).
+  by apply incl_interval_cons.
+Qed.
+
+Lemma add_sub_interval_incl_r i1 s i2 :
+  add_sub_interval i1 s = Some i2 ->
+  has (symbolic_slice_beq s) i2.
+Proof.
+  elim: i1 i2 => [|s1 i1 ih1] i2 /=.
+  + move=> [<-] /=.
+    by rewrite symbolic_slice_beq_refl.
+  case: (@idP (symbolic_slice_beq _ _)) => [heq|_].
+  + move=> [<-] /=.
+    by rewrite heq.
+  case: (odflt _ _).
+  + move=> [<-] /=.
+    by rewrite symbolic_slice_beq_refl.
+  case: (odflt _ _) => //.
+  apply: obindP => {}i2 hadd [<-] /=.
+  by rewrite (ih1 _ hadd) orbT.
+Qed.
+
+Lemma merge_interval_None i1 :
+  foldl (fun acc s => let%opt acc := acc in add_sub_interval acc s) None i1 = None.
+Proof. by elim: i1. Qed.
+
+Lemma merge_interval_r i1 i2 i :
+  merge_interval i1 i2 = Some i ->
+  incl_interval i2 i.
+Proof.
+  rewrite /merge_interval.
+  elim: i1 i2 i => [|s1 i1 ih1] i2 i /=.
+  + by move=> [<-]; apply incl_interval_refl.
+  case hadd: add_sub_interval => [i2'|]; last first.
+  + by rewrite merge_interval_None.
+  move=> /ih1.
+  apply incl_interval_trans.
+  by apply (add_sub_interval_incl_l hadd).
+Qed.
+
+Lemma merge_interval_l i1 i2 i :
+  merge_interval i1 i2 = Some i ->
+  incl_interval i1 i.
+Proof.
+  rewrite /merge_interval.
+  elim: i1 i2 i => [//|s1 i1 ih1] i2 i /=.
+  case hadd: add_sub_interval => [i2'|]; last first.
+  + by rewrite merge_interval_None.
+  move=> /[dup] /ih1 ->; rewrite andbT.
+  have /(has_nthP {| ss_ofs := 0; ss_len := 0 |}) [k hk heqsub] :=
+    add_sub_interval_incl_r hadd.
+  move=> /merge_interval_r /(all_nthP {| ss_ofs := 0; ss_len := 0 |}) /(_ _ hk).
+  apply sub_has => k'.
+  by apply symbolic_slice_beq_trans.
+Qed.
+
+Lemma incl_status_map_merge_status_l sm1 sm2 :
+  incl_status_map (Mvar.map2 merge_status sm1 sm2) sm1.
 Proof.
   apply Mvar.inclP => x.
   rewrite Mvar.map2P //.
-  rewrite /merge_bytes.
-  case: Mvar.get => [bytes1|//].
-  case: Mvar.get => [bytes2|//].
-  case: ByteSet.is_empty => //.
-  by apply subset_inter_l.
+  rewrite /merge_status.
+  case: Mvar.get => [status1|//].
+  case: Mvar.get => [status2|//].
+  case: status1 status2 => [||i1] [||i2] //=.
+  + by apply incl_interval_refl.
+  case hmerge: merge_interval => [i|//] /=.
+  by apply (merge_interval_l hmerge).
 Qed.
 
-Lemma incl_bytes_map_merge_bytes_r r bm1 bm2 :
-  incl_bytes_map r (Mvar.map2 merge_bytes bm1 bm2) bm2.
+Lemma incl_status_map_merge_status_r sm1 sm2 :
+  incl_status_map (Mvar.map2 merge_status sm1 sm2) sm2.
 Proof.
   apply Mvar.inclP => x.
   rewrite Mvar.map2P //.
-  rewrite /merge_bytes.
-  case: Mvar.get => [bytes1|//].
-  case: Mvar.get => [bytes2|//].
-  case: ByteSet.is_empty => //.
-  by apply subset_inter_r.
+  rewrite /merge_status.
+  case: Mvar.get => [status1|//].
+  case: Mvar.get => [status2|//].
+  case: status1 status2 => [||i1] [||i2] //=.
+  + by apply incl_interval_refl.
+  case hmerge: merge_interval => [i|//] /=.
+  by apply (merge_interval_r hmerge).
 Qed.
 
 Lemma incl_merge_l rmap1 rmap2 : incl (merge rmap1 rmap2) rmap1.
@@ -5910,14 +6085,15 @@ Proof.
     rewrite Mvar.map2P //.
     case: Mvar.get => [sr1|//].
     case: Mvar.get => [sr2|//].
-    by case: ifP.
+    case: sub_region_beq => //.
+    by apply sub_region_beq_refl.
   apply Mr.inclP => r.
   rewrite Mr.map2P //.
-  rewrite /merge_bytes_map.
-  case: Mr.get => [bm1|//].
-  case: Mr.get => [bm2|//].
+  rewrite /merge_status_map.
+  case: Mr.get => [sm1|//].
+  case: Mr.get => [sm2|//].
   case: Mvar.is_empty => //.
-  by apply incl_bytes_map_merge_bytes_l.
+  by apply incl_status_map_merge_status_l.
 Qed.
 
 Lemma incl_merge_r rmap1 rmap2 : incl (merge rmap1 rmap2) rmap2.
@@ -5930,17 +6106,184 @@ Proof.
     by case: ifP.
   apply Mr.inclP => r.
   rewrite Mr.map2P //.
-  rewrite /merge_bytes_map.
-  case: Mr.get => [bm1|//].
-  case: Mr.get => [bm2|//].
+  rewrite /merge_status_map.
+  case: Mr.get => [sm1|//].
+  case: Mr.get => [sm2|//].
   case: Mvar.is_empty => //.
-  by apply incl_bytes_map_merge_bytes_r.
+  by apply incl_status_map_merge_status_r.
 Qed.
 
-Lemma subset_clear_bytes_compat bytes1 bytes2 i :
-  ByteSet.subset bytes1 bytes2 ->
-  ByteSet.subset (clear_bytes i bytes1) (clear_bytes i bytes2).
+(* TODO: reorganize & use setoid as much as possible *)
+Instance symbolic_slice_beq_equiv : Equivalence symbolic_slice_beq.
 Proof.
+  split.
+  + exact symbolic_slice_beq_refl.
+  + exact symbolic_slice_beq_sym'.
+  exact symbolic_slice_beq_trans.
+Qed.
+
+Instance all2_equiv A (r : rel A) : Equivalence r -> Equivalence (all2 r).
+Proof.
+  move=> [hrefl hsym htrans].
+  split.
+  + by apply all2_refl.
+  + move=> l1 l2.
+    (* is this correct elim syntax? *)
+    elim/list_all2_ind: l1 l2 / => [//|x1 l1 x2 l2] /=.
+    by move=> /hsym -> _ ->.
+  by move=> /[swap]; apply all2_trans; move=> /[swap].
+Qed.
+
+(* TODO: better proof with no quadratic complexity *)
+Instance is_const_compat : Proper (eq_expr ==> eq) is_const.
+Proof. by move=> [^~ 1] [^~ 2] //= /eqP ->. Qed.
+
+Instance symbolic_slice_ble_compat :
+  Proper (symbolic_slice_beq ==> symbolic_slice_beq ==> eq) symbolic_slice_ble.
+Proof.
+  move=> s1 s1' heqsub1 s2 s2' heqsub2.
+  rewrite /symbolic_slice_ble.
+  move: heqsub1 heqsub2; rewrite /symbolic_slice_beq.
+  by move=>
+    /andP [/is_const_compat -> /is_const_compat ->]
+    /andP [/is_const_compat -> _].
+Qed.
+
+Lemma symbolic_zone_beq_get_suffix z1 z1' z2 :
+  symbolic_zone_beq z1 z1' ->
+  match get_suffix z1 z2 with
+  | None => get_suffix z1' z2 = None
+  | Some None => get_suffix z1' z2 = Some None
+  | Some (Some z) =>
+    exists2 z', get_suffix z1' z2 = Some (Some z') & symbolic_zone_beq z z'
+  end.
+Proof.
+  move=> heq; move: heq z2.
+  (* is this correct elim syntax? *)
+  elim/list_all2_ind: z1 z1' / => [|s1 z1 s1' z1' heqsub hall2 ih] z2 /=.
+  + exists z2 => //.
+    by apply symbolic_zone_beq_refl.
+  case: z2 => [//|s2 z2].
+  (* forced to do these "have", because setoid & is_true do not work well *)
+  have ->: symbolic_slice_beq s1' s2 = symbolic_slice_beq s1 s2.
+  + by apply /idP/idP; apply symbolic_slice_beq_trans; [|symmetry].
+  have ->: symbolic_slice_ble s1' s2 = symbolic_slice_ble s1 s2.
+  + (* we need standard rewrite *)
+    by rewrite -> heqsub.
+  have ->: symbolic_slice_ble s2 s1' = symbolic_slice_ble s2 s1.
+  + by rewrite -> heqsub.
+  case: (@idP (symbolic_slice_beq _ _)) => [heqsub2|_].
+  + by apply ih.
+  case hle1: (odflt _ _) => //.
+  case hle2: (odflt _ _) => //.
+  case: z1 z1' hall2 {ih} => [|??] [|??] // _.
+  move /andP: heqsub => [/is_const_compat <- /is_const_compat <-].
+  case: (match is_const _ with | Some _ => _ | _ => _ end) => [[|]|] => //.
+  move=> ?; eexists; first by reflexivity.
+  by apply symbolic_zone_beq_refl.
+Qed.
+
+Lemma add_sub_interval_compat se s i1 i2 i1' :
+  wf_interval se i1 ->
+  wf_interval se i2 ->
+  add_sub_interval i1 s = Some i1' ->
+  incl_interval i2 i1 ->
+  exists2 i2',
+    add_sub_interval i2 s = Some i2' &
+    incl_interval i2' i1'.
+Proof.
+  elim: i1 i1' i2 => [|s1 i1 ih1] i1' i2 /=.
+  + move=> _ _ [<-]. case: i2 => /=. move=> _. eexists; first by reflexivity. apply incl_interval_refl.
+    done.
+  move=> hwf1 hwf2.
+  case h: symbolic_slice_beq.
+  + move=> [<-].
+    case: i2 hwf2. move=> /=. move=> _ _. eexists; first by reflexivity. move=> /=. rewrite h. done.
+  move=> s2 i2 /= hwf2.
+  move=> /andP [h1 h2].
+  have ->: symbolic_slice_beq s s2 = symbolic_slice_beq s2 s1.
+  + rewrite (symbolic_slice_beq_sym s2 s1). apply /idP/idP; apply symbolic_slice_beq_trans. symmetry. done. done.
+  move: h1. case H: symbolic_slice_beq.
+  + move=> _.
+    eexists; first by reflexivity. simpl. rewrite H. done.
+  move=> h1.
+  move: hwf2 => []. admit.
+  case hle1: (odflt _ _).
+  + move=> [<-]. admit.
+  case hle2: (odflt _ _) => //.
+  apply: obindP. move=> {}i1' hadd [<-] hincl.
+  have := ih1 _ _ _ _ hadd.
+  t_xrbindP.
+  + admit.
+  
+   rewrite /incl_interval. move=> /(all_nthP {| ss_ofs := 0; ss_len := 0 |}).
+   move=> h0.
+   case: i2. admit.
+Admitted.
+
+Lemma incl_status_compat status1 status2 z :
+  incl_status status1 status2 ->
+  incl_status
+    (odflt Unknown (clear_status status1 z))
+    (odflt Unknown (clear_status status2 z)).
+Proof.
+  move=> hincl.
+  case: z => [//|s z] /=.
+  case: status1 status2 hincl => [||i1] [||i2] //=.
+  rewrite symbolic_slice_beq_refl. done.
+  case hadd: add_sub_interval => //=.
+  have := add_sub_interval_incl_r hadd. move=> ->. done.
+  case hadd1: add_sub_interval => //=.
+  move=> h.
+  have := add_sub_interval_compat hadd1 h. move=> [i2' -> h'] /=. done.
+  case hadd2: add_sub_interval => //=.
+  move=> h.
+  have:=add_sub_interval_compat hadd2 hadd1 h. done.
+  have h1 := add_sub_interval_incl_l hadd1.
+  have h2 := add_sub_interval_incl_l hadd2.
+  move=> h.
+  have := incl_interval_trans
+  
+
+Lemma subset_clear_bytes_compat rmap1 rmap2 status1 status2 z x :
+  incl rmap1 rmap2 ->
+  incl_status status1 status2 ->
+  incl_status
+    (odflt Unknown (clear_status_map_aux rmap1 z x status1))
+    (odflt Unknown (clear_status_map_aux rmap2 z x status2)).
+Proof.
+  move=> hinclr hincls.
+  rewrite /clear_status_map_aux.
+  case hsr1: Mvar.get => [sr1|//].
+  have [sr2 hsr2 heqsub] := incl_var_region hinclr hsr1.
+  rewrite hsr2.
+  have /andP [_ h] := heqsub.
+  have := symbolic_zone_beq_get_suffix z h.
+  case: (get_suffix (sr_zone sr1) z) => [[z1|]|]; [|by move->..].
+  move=> [z2 -> heqsub'].
+  clear_status
+  + admit.
+  + move=> -> /=. done.
+  move=> ->. simpl.
+   (get_suffix (sr_zone sr2) z) => [[z1|]|] [[z2|]|] //.
+  case: z1.
+  + case: z2 => //.
+  move=> s1 z1.
+  case: z2 => // s2 z2.
+  case: status1 status2 hincls => [||i1] [||i2] //=.
+  rewrite /symbolic_zone_beq /=. move=> _ /andP []. rewrite symbolic_slice_beq_sym. move=> ->. done.
+  case hadd: add_sub_interval => [i|//] /=. admit.
+  case h1: add_sub_interval => [?|//] /=.
+  case h2: add_sub_interval => [?|//] /=. admit.
+  add_sub_interval_incl_l
+    [/symbolic_slice_beq_sym -> _].
+  incl_status
+  incl_status
+  
+  
+  
+  case: incl
+  
   move=> /ByteSet.subsetP hsubset.
   apply /ByteSet.subsetP => z.
   rewrite /clear_bytes !ByteSet.removeE.
@@ -5948,30 +6291,31 @@ Proof.
   apply /andP; split=> //.
   by apply hsubset.
 Qed.
-
-Lemma incl_bytes_map_clear_bytes_map_compat r bm1 bm2 i :
-  incl_bytes_map r bm1 bm2 ->
-  incl_bytes_map r (clear_bytes_map i bm1) (clear_bytes_map i bm2).
+*)
+Lemma incl_status_map_clear_status_map_compat sm1 sm2 rmap1 rmap2 z :
+  incl_status_map sm1 sm2 ->
+  incl_status_map (clear_status_map rmap1 z sm1) (clear_status_map rmap2 z sm2).
 Proof.
   move=> /Mvar.inclP hincl.
   apply /Mvar.inclP => x.
-  rewrite /clear_bytes_map !Mvar.mapP.
-  case heq1: (Mvar.get bm1 x) (hincl x) => [bytes1|//] /=.
-  case: Mvar.get => [bytes2|//] /=.
+  rewrite /clear_status_map !Mvar.filter_mapP.
+  case heq1: (Mvar.get sm1 x) (hincl x) => [status1|//] /=.
+  case: Mvar.get => [status2|//] /=.
   by apply subset_clear_bytes_compat.
 Qed.
-
+*)
 (* not sure whether this is a good name *)
-Lemma incl_set_clear_pure_compat rmap1 rmap2 sr ofs len :
+Lemma incl_set_clear_pure_compat rmap1 rmap2 sr :
   incl rmap1 rmap2 ->
-  incl (set_clear_pure rmap1 sr ofs len) (set_clear_pure rmap2 sr ofs len).
+  incl (set_clear_pure rmap1 sr) (set_clear_pure rmap2 sr).
 Proof.
   move=> /andP [] hincl1 /Mr.inclP hincl2.
   apply /andP; split=> //=.
   apply /Mr.inclP => r.
-  rewrite /set_clear_bytes !Mr.setP.
-  case: eqP => [<-|//].
-  apply incl_bytes_map_clear_bytes_map_compat.
+  rewrite /set_clear_status !Mr.setP.
+  case: eqP => [?|//].
+  rewrite /get_status_map.
+  apply incl_status_map_clear_status_map_compat.
   rewrite /get_bytes_map.
   case heq1: Mr.get (hincl2 sr.(sr_region)) => [r1|] /=.
   + by case: Mr.get.
