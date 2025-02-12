@@ -1279,25 +1279,8 @@ Definition alloc_lvals rmap rs tys :=
 
 Section LOOP.
 
-Section SUBSEQ.
-
-Context {A : Type} (eqA : rel A).
-
-(* subseq but with custom equality relation *)
-Fixpoint subseqA (i1 i2: seq A) : bool :=
-  match i2 with
-  | [::] => if i1 is [::] then true else false
-  | s2 :: i2' =>
-    match i1 with
-    | [::] => true
-    | s1 :: i1' => subseqA (if eqA s1 s2 then i1' else i1) i2'
-    end
-  end.
-
-End SUBSEQ.
-
-Definition incl_interval : intervals -> intervals -> bool :=
-  subseqA symbolic_slice_beq.
+Definition incl_interval (i1 i2: intervals) : bool :=
+  all (fun s1 => has (symbolic_slice_beq s1) i2) i1.
 
 Definition incl_status status1 status2 :=
   match status1, status2 with

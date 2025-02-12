@@ -5587,171 +5587,20 @@ Qed.
 predicate Incl with semantic meaning, i.e. parametrized by some [se] and doing
   inclusions on concrete intervals. *)
 
-Section SUBSEQ.
-
-Context {A : Type} (eqA : rel A).
-
-Lemma subseqA_refl : Reflexive eqA -> Reflexive (subseqA eqA).
+Lemma incl_interval_refl : Reflexive incl_interval.
 Proof.
-  move=> hrefl.
-  elim=> [//|x s ih] /=.
-  by rewrite hrefl.
+  move=> i.
+  apply /(all_nthP {| ss_ofs := 0; ss_len := 0 |}) => k hk.
+  apply /(has_nthP {| ss_ofs := 0; ss_len := 0 |}).
+  exists k => //.
+  by apply symbolic_slice_beq_refl.
 Qed.
-
-Lemma cons_subseqA x1 s1 s2 :
-  subseqA eqA (x1 :: s1) s2 -> subseqA eqA s1 s2.
-Proof.
-  elim: s2 s1 x1 => [|x2 s2 ih2] [|x1' s1] x1 //=.
-  case: ifP => _.
-  + case: ifP => // _.
-    by apply ih2.
-  move=> /ih2.
-  case: ifP => // _.
-  by apply ih2.
-Qed.
-
-Lemma subseqA_cons_cons x1 s1 x2 s2 :
-  subseqA eqA (x1 :: s1) (x2 :: s2) =
-    if eqA x1 x2 then subseqA eqA s1 s2
-    else subseqA eqA (x1 :: s1) s2.
-Proof. by move=> /=; case: ifP. Qed.
-
-Lemma subseqA_cons x s : Reflexive eqA -> subseqA eqA s (x :: s).
-Proof.
-  move=> hrefl.
-  elim: s x => [//|x' s ih] x.
-  rewrite subseqA_cons_cons.
-  case: ifP => _.
-  + by apply ih.
-  by apply subseqA_refl.
-Qed.
-
-(* eqA does not return a Prop, is_true is inserted.
-   Due to the coercion, setoid does not work well. We define this boring lemma
-   to make it work better. *)
-Instance Equivalence_eq_compat : Equivalence eqA -> Proper (eqA ==> eqA ==> eq) eqA.
-Proof.
-  move=> hequiv.
-  move=> x1 x2 eq_x y1 y2 eq_y.
-  apply /idP/idP.
-  + move=> eq_xy.
-    transitivity y1 => //.
-    transitivity x1 => //.
-    by symmetry.
-  move=> eq_xy.
-  transitivity x2 => //.
-  transitivity y2 => //.
-  by symmetry.
-Qed.
-
-(* we use rewrite ->, because ssreflect's rewrite does not like setoid *)
-Lemma subseqA_trans : Equivalence eqA -> Transitive (subseqA eqA).
-Proof.
-  move=> hequiv.
-  move=> s1 s2 s3.
-  elim: s3 s1 s2 => [|x3 s3 ih3] [|x1 s1] [|x2 s2] //=.
-  case: ifP => heq1.
-  + move=> hsub; apply ih3.
-    rewrite -> heq1.
-    case: ifP => //= _.
-    by rewrite heq1.
-  case: ifP => heq2.
-  + rewrite <- heq2.
-    rewrite heq1.
-    by apply ih3.
-  case: ifP => _.
-  + move=> /cons_subseqA + /cons_subseqA.
-    by apply ih3.
-  move=> + /cons_subseqA.
-  by apply ih3.
-Qed.
-
-Instance subseqA_preorder : Equivalence eqA -> PreOrder (subseqA eqA).
-Proof.
-  move=> hequiv.
-  split.
-  + by apply: subseqA_refl.
-  by apply: subseqA_trans.
-Qed.
-
-(* useless in the end? *)
-Lemma subseqA_all (p : pred A) :
-  Proper (eqA ==> eq) p ->
-  forall s1 s2,
-    subseqA eqA s1 s2 ->
-    all p s2 ->
-    all p s1.
-Proof.
-  move=> p_compat s1 s2.
-  elim: s2 s1 => [|x2 s2 ih2] [|x1 s1] //= hsub /andP [hx2 all_s2].
-  have := ih2 _ hsub all_s2.
-  case: ifP => [heq|//] all_s1.
-  by rewrite (p_compat _ _ heq) hx2 all_s1.
-Qed.
-
-(* useless in the end? *)
-Lemma subseqA_sorted_in {p : {pred A}} {leT:rel A} :
-  Equivalence eqA ->
-  Proper (eqA ==> eq) p ->
-  Proper (eqA ==> eqA ==> eq) leT ->
-  {in p & &, ssrbool.transitive leT} ->
-  forall s1 s2,
-    all p s2 ->
-    subseqA eqA s1 s2 ->
-    path.sorted leT s2 ->
-    path.sorted leT s1.
-Proof.
-  move=> eqA_equiv p_compat leT_compat htrans s1 s2 all_s2 hsub.
-  elim: s2 s1 all_s2 hsub => [|x2 s2 ih2] [|x1 s1] //.
-  move=> /[dup] all_s2 /= /andP [p_x2 all_s2'] hsub.
-  rewrite (path.path_sorted_inE htrans) // => /andP [leT_x2 sorted_s2].
-  have {}ih2 := ih2 _ all_s2' hsub sorted_s2.
-  case: ifP hsub ih2 => [heq|_] hsub ih2 => //.
-  rewrite (path.path_sorted_inE htrans) /=; last first.
-  + rewrite -> heq.
-    rewrite p_x2 /=.
-    by apply (subseqA_all _ hsub all_s2').
-  rewrite ih2 andbT.
-  apply: sub_all (subseqA_all _ hsub leT_x2).
-  move=> x.
-  by rewrite -> heq.
-Qed.
-
-End SUBSEQ.
-
-(* TODO: reorganize & use setoid as much as possible *)
-Instance symbolic_slice_beq_equiv : Equivalence symbolic_slice_beq.
-Proof.
-  split.
-  + exact symbolic_slice_beq_refl.
-  + exact symbolic_slice_beq_sym'.
-  exact symbolic_slice_beq_trans.
-Qed.
-
-Instance incl_interval_preorder : PreOrder incl_interval.
-Proof.
-  by apply: subseqA_preorder.
-Qed.
-
-Definition incl_interval_refl := incl_interval_preorder.(PreOrder_Reflexive).
-Definition incl_interval_trans := incl_interval_preorder.(PreOrder_Transitive).
-
-Lemma incl_interval_nil_l i : incl_interval [::] i.
-Proof. by case: i => [|??]. Qed.
-
-Lemma incl_interval_cons s i :
-  incl_interval i (s :: i).
-Proof. by apply: subseqA_cons. Qed.
-
-Instance symbolic_slice_beq_compat :
-  Proper (symbolic_slice_beq ==> symbolic_slice_beq ==> eq) symbolic_slice_beq.
-Proof. by apply: Equivalence_eq_compat. Qed.
 
 Lemma incl_status_refl : Reflexive incl_status.
 Proof.
   move=> status.
   case: status => //= i.
-  by reflexivity.
+  by apply incl_interval_refl.
 Qed.
 
 Lemma incl_status_map_refl : Reflexive incl_status_map.
@@ -5774,22 +5623,19 @@ Proof.
   by apply incl_status_map_refl.
 Qed.
 
-Instance all2_equiv A (r : rel A) : Equivalence r -> Equivalence (all2 r).
+Lemma incl_interval_trans : Transitive incl_interval.
 Proof.
-  move=> [hrefl hsym htrans].
-  split.
-  + by apply all2_refl.
-  + move=> l1 l2.
-    (* is this correct elim syntax? *)
-    elim/list_all2_ind: l1 l2 / => [//|x1 l1 x2 l2] /=.
-    by move=> /hsym -> _ ->.
-  by move=> /[swap]; apply all2_trans; move=> /[swap].
+  move=> i1 i2 i3 hincl1 hincl2.
+  apply: sub_all hincl1 => s hhas2.
+  have [s' _ /andP [hhas3 heqsub]] := all_has hincl2 hhas2.
+  apply: sub_has hhas3 => s''.
+  by apply (symbolic_slice_beq_trans heqsub).
 Qed.
 
 Lemma incl_status_trans : Transitive incl_status.
 Proof.
   case=> [||i1] [||i2] [||i3] //= hincl1 hincl2.
-  by transitivity i2.
+  by apply (incl_interval_trans hincl2 hincl1).
 Qed.
 
 Lemma incl_status_map_trans : Transitive incl_status_map.
@@ -5949,54 +5795,14 @@ Proof.
   by rewrite (symbolic_zone_beq_sem_zone se heqz).
 Qed.
 
-(* To use path.sorted on [seq concrete_slice], we prove that concrete_slice is
-   eqType. *)
-Scheme Equality for concrete_slice.
-Lemma concrete_slice_eq_axiom : Equality.axiom concrete_slice_beq.
-Proof.
-  exact:
-    (eq_axiom_of_scheme internal_concrete_slice_dec_bl internal_concrete_slice_dec_lb).
-Qed.
-
-From HB Require Import structures.
-HB.instance Definition _ := hasDecEq.Build concrete_slice concrete_slice_eq_axiom.
-
-Lemma incl_intervalP se i1 i2 ci2 :
-  incl_interval i1 i2 ->
-  mapM (sem_slice se) i2 = ok ci2 ->
-  exists2 ci1, mapM (sem_slice se) i1 = ok ci1 & subseq ci1 ci2.
-Proof.
-  elim: i2 i1 ci2 => [|s2 i2 ih2] [|s1 i1] //=.
-  + by move=> _ _ [<-]; exists [::].
-  + by move=> ci2 _ _; exists [::] => //; apply sub0seq.
-  t_xrbindP=> _ hincl cs2 ok_cs2 ci2 ok_ci2 <-.
-  have [ci1 ok_ci1 hsub] := ih2 _ _ hincl ok_ci2.
-  have {}hsub: subseq (cs2 :: ci1) (cs2 :: ci2).
-  + by rewrite /= eq_refl.
-  case: ifP ok_ci1 => [heqsub|_] ok_ci1.
-  + exists (cs2::ci1) => //.
-    by rewrite (symbolic_slice_beqP se heqsub) ok_cs2 ok_ci1 /=.
-  exists ci1 => //.
-  apply: subseq_trans hsub.
-  by apply subseq_cons.
-Qed.
-
+(* true
 Lemma incl_interval_wf i1 i2 se :
   incl_interval i1 i2 ->
   wf_interval se i2 ->
   wf_interval se i1.
 Proof.
-  rewrite /wf_interval.
-  move=> hincl [ci2 [ok_ci2 all_ci2 sorted_ci2]].
-  have [ci1 ok_ci1 hsub] := incl_intervalP hincl ok_ci2.
-  exists ci1; split=> //.
-  + by apply (subseq_all hsub).
-  apply: (path.subseq_sorted_in _ hsub sorted_ci2).
-  apply: sub_in3 concrete_slice_ble_trans.
-  by apply /allP.
-Qed.
+Admitted.
 
-(*
 not true
 Lemma incl_status_wf status1 status2 se :
   incl_status status1 status2 ->
@@ -6007,18 +5813,24 @@ Proof.
   move=> hincl.
 *)
 
-(* TODO: better use offset_in_concrete_interval for uniformity? *)
-Lemma incl_interval_valid_offset se i1 i2 off :
+Lemma incl_intervalP i1 i2 se off :
   incl_interval i1 i2 ->
   wf_interval se i2 ->
   valid_offset_interval se i2 off ->
   valid_offset_interval se i1 off.
 Proof.
-  move=> hincl [ci2 [ok_ci2 all_ci2 sorted_ci2]] off_valid2 ci1 ok_ci1 off_valid1.
-  apply (off_valid2 _ ok_ci2).
-  have := incl_intervalP hincl ok_ci2.
-  rewrite ok_ci1 => -[_ [<-] hsub].
-  by apply (subseq_has hsub off_valid1).
+  move=> hincl [ci2 [ok_ci2 _ _]] /(_ ci2 ok_ci2) off_valid2 ci1 ok_ci1 off_valid1.
+  move: off_valid1 => /(has_nthP {| cs_ofs := 0; cs_len := 0 |}) [k1 hk1' off_in1].
+  have := hk1'; rewrite -(size_mapM ok_ci1) => hk1.
+  move: hincl => /(all_nthP {| ss_ofs := 0; ss_len := 0 |}) /(_ k1 hk1).
+  move=> /(has_nthP {| ss_ofs := 0; ss_len := 0 |}) [k2 hk2 heqsub].
+  have := hk2; rewrite (size_mapM ok_ci2) => hk2'.
+  apply /off_valid2 /(has_nthP {| cs_ofs := 0; cs_len := 0 |}).
+  exists k2 => //.
+  have := mapM_nth {| ss_ofs := 0; ss_len := 0 |} {| cs_ofs := 0; cs_len := 0 |} ok_ci1 hk1.
+  have := mapM_nth {| ss_ofs := 0; ss_len := 0 |} {| cs_ofs := 0; cs_len := 0 |} ok_ci2 hk2.
+  rewrite -(symbolic_slice_beqP _ heqsub).
+  by congruence.
 Qed.
 
 Lemma incl_statusP status1 status2 se off :
@@ -6028,7 +5840,7 @@ Lemma incl_statusP status1 status2 se off :
   valid_offset se status2 off.
 Proof.
   case: status1 status2 => [||i1] [||i2] //=.
-  by apply incl_interval_valid_offset.
+  by apply incl_intervalP.
 Qed.
 
 Lemma sub_region_beq_valid_pk sr1 sr2 rv se s2 pk :
@@ -6152,24 +5964,38 @@ Proof.
   rewrite /merge_interval.
 Admitted.
 
+Lemma incl_interval_cons s i :
+  incl_interval i (s :: i).
+Proof.
+  rewrite /incl_interval.
+  apply /(all_nthP {| ss_ofs := 0; ss_len := 0 |}).
+  move=> k hk /=.
+  apply /orP; right.
+  apply /(has_nthP {| ss_ofs := 0; ss_len := 0 |}).
+  exists k => //.
+  by apply symbolic_slice_beq_refl.
+Qed.
+
 (* We could probably deduce add_sub_interval_1/_2 from this lemma *)
 Lemma add_sub_interval_incl_l i1 s i2 :
   add_sub_interval i1 s = Some i2 ->
   incl_interval i1 i2.
 Proof.
-  elim: i1 i2 => [|s1 i1 ih1] i2 /=.
-  + by move=> _; apply incl_interval_nil_l.
+  elim: i1 i2 => [//|s1 i1 ih1] i2 /=.
   case: symbolic_slice_beq.
   + move=> [<-] /=.
     rewrite symbolic_slice_beq_refl /=.
-    by reflexivity.
+    by apply incl_interval_cons.
   case: (odflt _ _).
-  + move=> [<-].
+  + move=> [<-] /=.
+    rewrite symbolic_slice_beq_refl /= orbT /=.
+    apply: incl_interval_trans (incl_interval_cons _ _).
     by apply incl_interval_cons.
   case: (odflt _ _) => //.
   apply: obindP => {}i2 hadd [<-].
   rewrite /= symbolic_slice_beq_refl /=.
-  by apply (ih1 _ hadd).
+  apply (incl_interval_trans (ih1 _ hadd)).
+  by apply incl_interval_cons.
 Qed.
 
 Lemma add_sub_interval_incl_r i1 s i2 :
@@ -6194,13 +6020,13 @@ Lemma merge_interval_None i1 :
   foldl (fun acc s => let%opt acc := acc in add_sub_interval acc s) None i1 = None.
 Proof. by elim: i1. Qed.
 
-Lemma merge_interval_incl_r i1 i2 i :
+Lemma merge_interval_r i1 i2 i :
   merge_interval i1 i2 = Some i ->
   incl_interval i2 i.
 Proof.
   rewrite /merge_interval.
   elim: i1 i2 i => [|s1 i1 ih1] i2 i /=.
-  + by move=> [<-]; reflexivity.
+  + by move=> [<-]; apply incl_interval_refl.
   case hadd: add_sub_interval => [i2'|]; last first.
   + by rewrite merge_interval_None.
   move=> /ih1.
@@ -6208,171 +6034,14 @@ Proof.
   by apply (add_sub_interval_incl_l hadd).
 Qed.
 
-Lemma test se i1 i2 ci1 ci2 :
-  all (fun s1 => has (symbolic_slice_beq s1) i2) i1 ->
-  mapM (sem_slice se) i1 = ok ci1 ->
-  mapM (sem_slice se) i2 = ok ci2 ->
-  all (fun cs => 0 <? cs.(cs_len))%Z ci1 ->
-  all (fun cs => 0 <? cs.(cs_len))%Z ci2 ->
-  path.sorted concrete_slice_ble ci1 ->
-  path.sorted concrete_slice_ble ci2 ->
-  subseqA symbolic_slice_beq i1 i2.
-Proof.
-  move=> hincl ok_ci1 ok_ci2 all_ci1 all_ci2 sorted_ci1 sorted_ci2.
-
-  have: {subset ci1 <= ci2}.
-  + move=> cs /= /(nthP {| cs_ofs := 0; cs_len := 0 |}) [k hk hnth1].
-    have := mapM_nth {| ss_ofs := 0; ss_len := 0 |} {| cs_ofs := 0; cs_len := 0 |} ok_ci1.
-    rewrite (size_mapM ok_ci1) => /(_ _ hk). rewrite hnth1 => h1.
-    have /(all_nthP {| ss_ofs := 0; ss_len := 0 |}) := hincl.
-    rewrite (size_mapM ok_ci1) => /(_ _ hk).
-    move=> /(has_nthP {| ss_ofs := 0; ss_len := 0 |}). move=> [k' hk' heq].
-    have := mapM_nth {| ss_ofs := 0; ss_len := 0 |} {| cs_ofs := 0; cs_len := 0 |} ok_ci2 hk'.
-    have <- := symbolic_slice_beqP se heq. rewrite h1 => -[h2].
-    apply /(nthP {| cs_ofs := 0; cs_len := 0 |}).
-    exists k'.
-    rewrite -(size_mapM ok_ci2). done.
-    done.
-
-  move=> hsub.
-  have uniq_ci1: uniq ci1.
-  + apply (path.sorted_uniq_in (leT:=concrete_slice_ble)).
-    + apply: sub_in3 concrete_slice_ble_trans.
-      apply /allP. done.
-    + move=> cs hin.
-      have /allP := all_ci1. move=> /(_ cs hin) /ZltP ?.
-      apply /negP.
-      rewrite /concrete_slice_ble !zify. lia.
-    done.
-  have hcount := leq_uniq_count uniq_ci1 hsub.
-  have := proj1 (count_subseqP _ _) hcount.
-  move=> [ci2' hsub2 hperm].
-  have: ci1 = ci2'.
-  + apply (path.sorted_eq_in (leT := concrete_slice_ble)).
-    + apply: sub_in3 concrete_slice_ble_trans.
-      apply /allP. done.
-    + move=> cs1 cs2 hin1 hin2 /andP [].
-      have /allP -/(_ _ hin1) /ZltP ? := all_ci1.
-      have /allP -/(_ _ hin2) /ZltP ? := all_ci1.
-      rewrite /concrete_slice !zify. lia.
-    done.
-    apply: path.subseq_sorted_in hsub2 sorted_ci2.
-    apply: sub_in3 concrete_slice_ble_trans.
-    apply /allP. done.
-    done.
-  move=> ?; subst ci2'. move=> {hperm}.
-
-  have: exists2 m, size m = size i2 & i1 = mask m i2.
-  + have /subseqP [m heqsize hmask] := hsub2.
-    exists m.
-    + rewrite (size_mapM ok_ci2). done.
-    Search nth (@eq (seq _)).
-    apply (eq_from_nth (x0 := {| ss_ofs := 0; ss_len := 0 |})).
-    + rewrite size_mask. rewrite -(size_mask (s:=ci2)). rewrite -hmask.
-      rewrite (size_mapM ok_ci1). done. done.
-      rewrite (size_mapM ok_ci2). done.
-    move=> k hk.
-    have /(all_nthP {| ss_ofs := 0; ss_len := 0 |}) := hincl.
-    move=> /(_ _ hk). move=> /(has_nthP {| ss_ofs := 0; ss_len := 0 |}).
-    move=> [k' hk' heq].
-    have H1 := mapM_nth {| ss_ofs := 0; ss_len := 0 |} {| cs_ofs := 0; cs_len := 0 |} ok_ci1 hk.
-    have H2 := mapM_nth {| ss_ofs := 0; ss_len := 0 |} {| cs_ofs := 0; cs_len := 0 |} ok_ci2 hk'.
-    have := symbolic_slice_beqP se heq.
-    have hk_: (k < size (mask m i2))%nat.
-    + admit.
-    Require Import SetoidList. Sorted inside SetoidList
-    have := mem_nth hk_.
-    nth in_mem
-    mask in_mem
-    
-     rewrite H1 H2 => -[].
-    mask nth
-    
-    path.sorted nth
-    
-    path.sorted_ltn_nth_in
-    
-    pairwise nth
-    
-    
-    
-  
-  
-  uniq path.sorted
-  leq_uniq_count
-  sub_mem count subseq perm_eq perm_eq  path.sorted
-  
-
-Locate "=i". ssrbool.eq_mem sub_mem
-Lemma test T (r:rel T) : ssrbool.irreflexive r -> ssrbool.antisymmetric r.
-Proof.
-  move=> hirrefl x y. ssrbool.transitive ssrbool.irreflexive
-  perm_eq subseq
-  path.irr_sorted_eq_in sub_mem perm_eq
-
-(* Goal True. have := mem_subseq. *)
-Lemma test {A:eqType} (eqA : rel A) (s1 s2:seq A) :
-  {subset s1 <= s2} ->
-  path.sorted eqA s1 ->
-  path.sorted eqA s2 ->
-  subseq s1 s2.
-
-ssrbool.irreflexive ssrbool.antisymmetric
-path.sorted  perm_eq pred1 count path.sorted
-path.sorted subseq
-(*
-Lemma toto i1' i1'' i2 i2' :
-  foldl (fun acc s=> let%opt acc := acc in add_sub_interval acc s) (Some i2) (i1' ++ i1'') =
-  foldl (fun acc s=> let%opt acc := acc in add_sub_interval acc s) (Some i2') i1'' ->
-  incl_interval i1' i2'.
-Proof.
-  elim: i1' i2 => /=.
-  + move=> ? _. apply incl_interval_nil_l.
-  move=> s1 i1' ih i2 /=.
-  case hadd: add_sub_interval => [acc|].
-  + move=> /[dup] /ih ? /merge_interval_incl_r.
-  have := ih _ (add_sub_interval i2 s1) erefl.
-*)
-
-sub_mem perm_eq mask sub_mem
-
-mem_subseq
-perm_to_subseq
-subseqP
-subseq_uniqP
-path.subseq_sort
-path.mem2
-
-in_mem subseq
-subseq perm_eq set
-
-Lemma merge_interval_incl_l i1 i2 i :
+Lemma merge_interval_l i1 i2 i :
   merge_interval i1 i2 = Some i ->
   incl_interval i1 i.
 Proof.
   rewrite /merge_interval.
-  elim: i1 i2 i => [|s1 i1 ih1] i2 i /=.
-  + by move=> _; apply incl_interval_nil_l.
+  elim: i1 i2 i => [//|s1 i1 ih1] i2 i /=.
   case hadd: add_sub_interval => [i2'|]; last first.
   + by rewrite merge_interval_None.
-  
-  
-  case: i1 => /=. move=> _. apply incl_interval_nil_l.
-  move=> s1 i1. case: i1 => [|s2 i1] /=.
-  admit.
-  case: i1 => [|s3 i1] /=.
-  add_sub_interval "wf"
-  
-  
-  
-  
-  
-  rewrite /merge_interval.
-  elim: i1 i2 i => [|s1 i1 ih1] i2 i /=.
-  + by move=> _; apply incl_interval_nil_l.
-  case hadd: add_sub_interval => [i2'|]; last first.
-  + by rewrite merge_interval_None.
-  move=> /[dup] /ih1 ?. /merge_interval_incl_r.
   move=> /[dup] /ih1 ->; rewrite andbT.
   have /(has_nthP {| ss_ofs := 0; ss_len := 0 |}) [k hk heqsub] :=
     add_sub_interval_incl_r hadd.
@@ -6442,6 +6111,27 @@ Proof.
   case: Mr.get => [sm2|//].
   case: Mvar.is_empty => //.
   by apply incl_status_map_merge_status_r.
+Qed.
+
+(* TODO: reorganize & use setoid as much as possible *)
+Instance symbolic_slice_beq_equiv : Equivalence symbolic_slice_beq.
+Proof.
+  split.
+  + exact symbolic_slice_beq_refl.
+  + exact symbolic_slice_beq_sym'.
+  exact symbolic_slice_beq_trans.
+Qed.
+
+Instance all2_equiv A (r : rel A) : Equivalence r -> Equivalence (all2 r).
+Proof.
+  move=> [hrefl hsym htrans].
+  split.
+  + by apply all2_refl.
+  + move=> l1 l2.
+    (* is this correct elim syntax? *)
+    elim/list_all2_ind: l1 l2 / => [//|x1 l1 x2 l2] /=.
+    by move=> /hsym -> _ ->.
+  by move=> /[swap]; apply all2_trans; move=> /[swap].
 Qed.
 
 (* TODO: better proof with no quadratic complexity *)
