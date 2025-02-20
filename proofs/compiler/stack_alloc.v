@@ -1553,7 +1553,8 @@ Definition alloc_syscall ii rmap rs o es :=
       Let p  := get_regptr xe in
       Let xp := get_regptr x in
       Let sr := get_sub_region rmap xe in
-      let rmap := set_move rmap x sr Valid in (* FIXME *)
+      Let rmap := set_clear rmap xe sr in
+      let rmap := set_move rmap x sr Valid in
       ok (rmap,
           [:: MkI ii (sap_immediate saparams xlen (Zpos len));
               MkI ii (Csyscall [::Lvar xp] o [:: Plvar p; Plvar xlen])])
