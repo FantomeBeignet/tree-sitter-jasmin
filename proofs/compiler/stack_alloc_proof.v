@@ -6380,137 +6380,13 @@ Proof.
          (hwfst1 _ _ heq1) (hwfst2 _ _ heq2) hincls hclear1.
 Qed.
 
-(* Semantic inclusion of region_var *)
-Definition valid_offset_incl se rv1 rv2 :=
-  forall r x off,
-    valid_offset se (get_var_status rv1 r x) off ->
-    valid_offset se (get_var_status rv2 r x) off.
-
-Lemma get_var_status_set_clear_status rmap sr r y :
-  get_var_status (set_clear_status rmap sr) r y =
-    let statusy := get_var_status rmap r y in
-    if sr.(sr_region) != r then statusy
-    else
-      odflt Unknown (clear_status_map_aux rmap sr.(sr_zone) y statusy).
-Proof.
-  rewrite /set_clear_status /get_var_status.
-  rewrite get_status_map_setP.
-  case: eqP => [->|//] /=.
-  by apply get_status_clear.
-Qed.
-
-Lemma valid_offset_incl_clear_status se status1 status2 z cs off :
-  wf_status se status1 ->
-  wf_status se status2 ->
-  sem_zone se z = ok cs ->
-  (forall off, valid_offset se status1 off -> valid_offset se status2 off) ->
-  valid_offset se (odflt Unknown (clear_status status1 z)) off ->
-  valid_offset se (odflt Unknown (clear_status status2 z)) off.
-Proof.
-  move=> hwfs1 hwfs2.
-  case: z => [//|s z] /=.
-  t_xrbindP=> {}cs ok_cs _.
-  case: status1 status2 hwfs1 hwfs2 => [||i1] [||i2] /=; last first.
-  move=> i1_wf i2_wf hincl.
-  case hadd1: add_sub_interval => [i1'|].
-  + simpl. case hadd2: add_sub_interval. simpl. admit.
-  simpl. add_sub_interval_2
-  simpl. done.
-  
-  case: status1 hwfs1 => [|//|i1] /=.
-  + move=> _ /(_ _ erefl) hincl.
-    rewrite /valid_offset_interval /= ok_cs /= => /(_ _ erefl) off_nin.
-    case: status2 hwfs2 hincl => [||i2] /=.
-    + move=> _ _.
-      by rewrite /valid_offset_interval /= ok_cs /= => _ [<-].
-    + move=> _ hincl.
-      by apply (hincl 0).
-    move=> i2_wf hincl.
-    case hadd: add_sub_interval => [i2'|] /=.
-    have [ci2 [ok_ci2 _ _]] := i2_wf.
-    have hlt: 0 < cs.(cs_len). admit.
-    have i2'_wf := wf_interval_add_sub_interval hadd i2_wf ok_cs hlt.
-    have [ci2' [ok_ci2' _ _]] := i2'_wf.
-    rewrite /valid_offset_interval ok_ci2' => _ [<-].
-    have := add_sub_interval_1 hadd ok_cs ok_ci2'. (*
-    offset_in_concrete_interval
-    admit.
-    add_sub_interval
-    have hincl_ := add_sub_interval_incl_r hadd.
-    have := incl_intervalP hincl_.
-    valid_offset_interval
-    rewrite /valid_offset_interval. ok_ci2.
-    have := add_sub_interval_1
-    
-    
-     admit.
-   [||i2] //=.
-  + case: status2 => [||i2] /=.
-    + done.
-    + done.
-    move=> ?. case hadd: add_sub_interval => [i2'|//] /=.
-    move=> off_valid + /=.
-    t_xrbindP=> _ cs ok_cs <-. simpl. have := add_sub_interval_1
-    
-  case: status1 status2 => [||i1] [||i2] //=. admit. rewrite /valid_offset_interval.
-  intuition.
-  move=> h /=. case hadd: add_sub_interval => /=. admit.
-  case: status1 status2 hwfs1 hwfs2 hincl => [||i1] [||i2] //= hwfs1 hwfs2 hincl.
-  + move=> [<-].
-    eexists; first by reflexivity.
-    by apply incl_status_refl.
-  + apply: obindP => i1' hadd [<-].
-    eexists; first by reflexivity.
-    by rewrite /= (add_sub_interval_incl_r hadd).
-  apply: obindP => i1' hadd1 [<-].
-  have [i2' hadd2 hincl'] := incl_interval_add_sub_interval_compat hwfs1 hwfs2 hadd1 hincl.
-  rewrite hadd2.
-  by eexists; first by reflexivity. *)
-Admitted.
-
-Lemma test se rmap1 rmap2 z x status1 status2 off :
-  Incl rmap1 rmap2 ->
-  (forall off, valid_offset se status1 off -> valid_offset se status2 off) ->
-  valid_offset se (odflt Unknown (clear_status_map_aux rmap1 z x status1)) off ->
-  valid_offset se (odflt Unknown (clear_status_map_aux rmap2 z x status2)) off.
-Proof.
-  move=> [hinclr hincls] hincl.
-  rewrite /clear_status_map_aux.
-  case hsr1: Mvar.get => [sr1|//].
-  have [sr2 hsr2 heqsub] := hinclr _ _ hsr1.
-  rewrite hsr2.
-  have /andP [_ heqzone] := heqsub.
-  have := symbolic_zone_beq_get_suffix z heqzone.
-  case: get_suffix => [[z1|]|]; last first.
-  + by [].
-  + move=> -> /=.
-    by apply hincl.
-  move=> [z2 -> heqzone'] off_valid.
-  have /incl_statusP := symbolic_zone_beq_clear_status status2 heqzone'. apply.
-  have := valid_offset_incl_clear_status _ _ _ hincl off_valid.
-  have [status2' hclear2 hincls'] :=
-    incl_status_clear_status_compat hwfs1 hwfs2 hincls hclear1.
-  have [status2'' hclear2' hincls''] :=
-    symbolic_zone_beq_clear_status' heqzone' hclear2.
-  exists status2'' => //.
-  by apply (incl_status_trans hincls' hincls'').
-  
-  case hsr1: Mvar.get.
-
 (* not sure whether this is a good name *)
-Lemma valid_offset_incl_set_clear_status_compat se (rmap1 rmap2 : region_map) sr :
-  Incl rmap1 rmap2 ->
-(*   wfr_STATUS rmap1 se -> *)
-(*   wfr_STATUS rmap2 se -> *)
-  valid_offset_incl se (set_clear_status rmap1 sr) (set_clear_status rmap2 sr).
+Lemma incl_set_clear_pure_compat se rmap1 rmap2 sr :
+  incl rmap1 rmap2 ->
+  wfr_STATUS rmap1 se ->
+  wfr_STATUS rmap2 se ->
+  incl (set_clear_pure rmap1 sr) (set_clear_pure rmap2 sr).
 Proof.
-  move=> [hinclr hincls] r x off.
-  rewrite !get_var_status_set_clear_status.
-  case: eqP => heqr /=.
-  + rewrite /clear_status_map_aux.
-    
-(*
-
   move=> /[dup] hincl /andP [hinclr /Mr.inclP hincls] hwfst1 hwfst2 .
   apply /andP; split=> //=.
   apply /Mr.inclP => r.
@@ -6528,7 +6404,7 @@ Proof.
   + by case: Mr.get.
   move=> _.
   apply /Mvar.inclP => x.
-  by rewrite Mvar.get0. *)
+  by rewrite Mvar.get0.
 Qed.
 
 Lemma incl_clear_status status z :
@@ -6578,6 +6454,19 @@ Proof.
     by apply incl_status_map_clear_status_map.
   case: Mr.get => // bm.
   by apply incl_status_map_refl.
+Qed.
+
+Lemma get_var_status_set_clear_status rmap sr r y :
+  get_var_status (set_clear_status rmap sr) r y =
+    let statusy := get_var_status rmap r y in
+    if sr.(sr_region) != r then statusy
+    else
+      odflt Unknown (clear_status_map_aux rmap sr.(sr_zone) y statusy).
+Proof.
+  rewrite /set_clear_status /get_var_status.
+  rewrite get_status_map_setP.
+  case: eqP => [->|//] /=.
+  by apply get_status_clear.
 Qed.
 
 Lemma wfr_STATUS_set_clear_pure rmap se sr ty :
@@ -7007,7 +6896,10 @@ Proof.
       case hle4: (odflt _ _).
       + admit. (*
       (* instead of incl_status which is syntactic, we could prove Incl_status, a semantic version
-      *)
+      Definition valid_offset_impl se rv1 rv2 :=
+        forall r x off,
+          valid_offset se status (get_var_status rv1 r x) off ->
+          valid_offset se status (get_var_status rv2 r x) off *)
       congruence.
    rewrite -/(add_sub_interval (s::i) s2). move
   + done. *)
@@ -7477,7 +7369,7 @@ Lemma eq_read_holed_rmap table rmap se m0 s1 s2 mem2 l sr ty addr off :
       forall addr, sub_region_addr se sr = ok addr ->
       disjoint_zrange addr (size_of ty) p (wsize_size U8)) l ->
     read mem2 Aligned p U8 = read (emem s2) Aligned p U8) ->
-  List.Forall (fun '(sr, ty) => valid_offset_incl se rmap (set_clear_pure rmap sr)) l ->
+  List.Forall (fun '(sr, ty) => Incl rmap (set_clear_pure rmap sr)) l ->
   wf_sub_region se sr ty ->
   sub_region_addr se sr = ok addr ->
   0 <= off /\ off < size_of ty ->
@@ -7500,7 +7392,7 @@ Proof.
     + by apply (no_overflow_sub_region_addr hwf haddr).
     by apply (zbetween_sub_region_addr hwf haddr).
   apply List.Forall_forall => -[sr2 ty2] hin2 addr2 haddr2.
-  have /List.Forall_forall -/(_ _ hin2) hincls := hlincl.
+  have /List.Forall_forall -/(_ _ hin2) hinclr := hlincl.
   have /List.Forall_forall -/(_ _ hin2) [hwf2 hw2] := hlwf.
 
   have ok_off: sem_pexpr true [::] se off >>= to_int = ok off.
@@ -7514,11 +7406,12 @@ Proof.
   case: (sr2.(sr_region) =P sr.(sr_region)) => heqr.
   + move: off_valid; rewrite -heqr => /(_ hw2) [x hsr off_valid].
     apply (disjoint_symbolic_zone_disjoint_zrange hwf2 haddr2 hwf' haddr' heqr).
-    have := hincls _ _ _ off_valid.
+    have [_ hincls] := hinclr.
+    have hwfs := [elaborate (get_var_status_wf_status sr2.(sr_region) x wfr_status)].
+    have := incl_statusP (hincls _ _) hwfs off_valid.
     rewrite get_var_status_set_clear_status eqxx /= => {}off_valid.
     case: hsr => hsr.
     + by move: off_valid; rewrite /clear_status_map_aux hsr.
-    have hwfs := [elaborate (get_var_status_wf_status sr2.(sr_region) x wfr_status)].
     have [cs ok_cs wf_cs] := hwf.(wfsr_zone).
     have [cs2 ok_cs2 wf_cs2] := hwf2.(wfsr_zone).
     have hbound:  0 <= off < cs_len cs.
@@ -7544,7 +7437,7 @@ Lemma wfr_VAL_holed_rmap table rmap se m0 s1 s2 mem1 mem2 l :
       forall addr, sub_region_addr se sr = ok addr ->
       disjoint_zrange addr (size_of ty) p (wsize_size U8)) l ->
     read mem2 Aligned p U8 = read (emem s2) Aligned p U8) ->
-  List.Forall (fun '(sr, ty) => valid_offset_incl se rmap (set_clear_pure rmap sr)) l ->
+  List.Forall (fun '(sr, ty) => Incl rmap (set_clear_pure rmap sr)) l ->
   wfr_VAL rmap se (with_mem s1 mem1) (with_mem s2 mem2).
 Proof.
   move=> hvs hlwf hlunch hlincl.
@@ -7571,7 +7464,7 @@ Lemma wfr_PTR_holed_rmap table rmap se m0 s1 s2 mem2 l :
       forall addr, sub_region_addr se sr = ok addr ->
       disjoint_zrange addr (size_of ty) p (wsize_size U8)) l ->
     read mem2 Aligned p U8 = read (emem s2) Aligned p U8) ->
-  List.Forall (fun '(sr, ty) => valid_offset_incl se rmap (set_clear_pure rmap sr)) l ->
+  List.Forall (fun '(sr, ty) => Incl rmap (set_clear_pure rmap sr)) l ->
   wfr_PTR rmap se (with_mem s2 mem2).
 Proof.
   move=> hvs hlwf hlunch hlincl.
@@ -7605,7 +7498,7 @@ Lemma valid_state_holed_rmap table rmap se m0 s1 s2 mem1 mem2 l :
       forall addr, sub_region_addr se sr = ok addr ->
       disjoint_zrange addr (size_of ty) p (wsize_size U8)) l ->
     read mem2 Aligned p U8 = read (emem s2) Aligned p U8) ->
-  List.Forall (fun '(sr, ty) => valid_offset_incl se rmap (set_clear_pure rmap sr)) l ->
+  List.Forall (fun '(sr, ty) => Incl rmap (set_clear_pure rmap sr)) l ->
   valid_state table rmap se m0 (with_mem s1 mem1) (with_mem s2 mem2).
 Proof.
   move=> hvs hvalideq1 hss2 hvalideq2 heqmem_ hlwf hlunch hlincl.
@@ -8078,16 +7971,6 @@ Proof.
   by apply incl_status_clear_status_map_aux_idempotent.
 Qed.
 
-Lemma Incl_valid_offset_incl se rmap1 rmap2 :
-  Incl rmap1 rmap2 ->
-  wfr_STATUS rmap1 se ->
-  valid_offset_incl se rmap1 rmap2.
-Proof.
-  move=> [_ hincls] hwfst r x off.
-  apply /incl_statusP => //.
-  by apply wfr_STATUS_alt.
-Qed.
-
 (* TODO: in the long term, try to merge with what is proved about calls *)
 Lemma alloc_syscallP ii rmap rs o es rmap2 c table se m0 s1 s2 ves scs m vs s1' :
   alloc_syscall saparams pmap ii rmap rs o es = ok (rmap2, c) ->
@@ -8128,8 +8011,11 @@ Proof.
   have hwfg: wf_sub_region se srg g.(gv).(vtype).
   + have hgvalidg := check_gvalid_lvar hgetg.
     by apply (check_gvalid_wf wfr_wf hgvalidg).
+(*   have hsub: subtype x.(vtype) g.(gv).(vtype).
+  + by have -> /= := type_of_get_gvar_array hgvarg; rewrite hty. *)
 
   (* clear the argument *)
+(*   have [rmap1 [rmap2' [hrmap1 hrmap2' hincl2]]] := set_sub_region_clear hrmap2. *)
   have hincl: Incl rmap2 rmap.
   + move /set_clearP : hrmap2 => [_ ->].
     by apply Incl_set_clear_pure.
@@ -8163,8 +8049,7 @@ Proof.
       by rewrite -(WArray.fill_size hfill) positive_nat_Z.
     constructor; last by constructor.
     have /set_clearP [_ ->] /= := hrmap2.
-    apply (Incl_valid_offset_incl (Incl_set_clear_pure_idempotent _ _)).
-    by apply (wfr_STATUS_set_clear_pure wfr_wf hwfg wfr_status).
+    by apply Incl_set_clear_pure_idempotent.
 
   (* update the [scs] component *)
   set s1'' := with_scs s1 (get_random (escs s1) len).1.
