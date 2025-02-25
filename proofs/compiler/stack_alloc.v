@@ -7,7 +7,7 @@ Require Import compiler_util byteset.
 Require slh_lowering.
 Require Import ZArith.
 Require Import Uint63.
-Require Import stack_alloc_params.
+Require Export stack_alloc_params.
 
 Set Implicit Arguments.
 Unset Strict Implicit.
