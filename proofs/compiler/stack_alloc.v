@@ -711,10 +711,10 @@ Definition merge_table (t1 t2 : table) :=
       end) t1.(bindings) t2.(bindings)
   in
   let n :=
-    if Uint63.leb t1.(counter) t2.(counter) then t2.(counter)
-    else t1.(counter)
+    if Uint63.leb t1.(counter) t2.(counter) then t1.(counter)
+    else t2.(counter)
   in
-  let vars := Sv.union t1.(vars) t2.(vars) in
+  let vars := Sv.inter t1.(vars) t2.(vars) in
   {| bindings := b; counter := n; vars := vars |}.
 
 (* TODO: clean & move *)
@@ -1295,21 +1295,16 @@ Definition incl (rmap1 rmap2:region_map) :=
   Mvar.incl (fun x => sub_region_beq) rmap1.(var_region) rmap2.(var_region) &&
   Mr.incl (fun _ => incl_status_map) rmap1.(region_var) rmap2.(region_var).
 
-Definition merge_interval (i1 i2 : intervals) :=
-  foldl (fun acc s =>
-    let%opt acc := acc in
-    add_sub_interval acc s) (Some i2) i1.
-
+(* Trivial merge: if both statuses are equal (checked with double inclusion),
+   then we return the first one.
+   Else we return None (i.e. Unknown). *)
 Definition merge_status (_x:var) (status1 status2: option status) :=
   let%opt status1 := status1 in
   let%opt status2 := status2 in
-  match status1, status2 with
-  | Unknown, _ | _, Unknown => None
-  | Valid, s | s, Valid => Some s
-  | Borrowed i1, Borrowed i2 =>
-    let%opt i := merge_interval i1 i2 in
-    Some (Borrowed i)
-  end.
+  if incl_status status1 status2 && incl_status status2 status1 then
+    Some status1
+  else
+    None.
 
 Definition merge_status_map (_r:region) (bm1 bm2: option status_map) :=
   match bm1, bm2 with
@@ -1330,8 +1325,7 @@ Definition merge (rmap1 rmap2:region_map) :=
      region_var := Mr.map2 merge_status_map rmap1.(region_var) rmap2.(region_var) |}.
 
 Definition incl_table (table1 table2 : table) := [&&
-  Mvar.incl (fun _ => eq_expr) table1.(bindings) table2.(bindings),
-  Uint63.leb table1.(counter) table2.(counter) &
+  Mvar.incl (fun _ => eq_expr) table1.(bindings) table2.(bindings) &
   Sv.subset table1.(vars) table2.(vars)].
 
 Variable ii:instr_info.
