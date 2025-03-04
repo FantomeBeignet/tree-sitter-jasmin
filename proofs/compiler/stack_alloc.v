@@ -772,12 +772,11 @@ Definition remove_binding_lval table lv :=
 
 (* Like in propagate_inline, we first call remove_binding_lval, then this
    function. Thus we can consider only the interesting case here. *)
-Definition update_table table lv ty e :=
-  match lv with
-  | Lvar x =>
-    match e with
-    | None => ok table
-    | Some e =>
+Definition update_table table lv ty oe :=
+  match oe with
+  | None => ok table
+  | Some e =>
+    if lv is Lvar x then
       Let _ :=
         (* FIXME: do we need to be that strict? *)
         assert (x.(vtype) == ty)
@@ -785,12 +784,34 @@ Definition update_table table lv ty e :=
       in
       o2r (stk_ierror_no_var "variable not fresh (update_table)")
           (table_set_var table x e)
-    end
-  | _ => ok table
+    else
+      ok table
   end.
 
 End CLONE.
 
+Section CHECK.
+
+(* The code in this file is called twice.
+   - First, it is called from the stack alloc OCaml oracle. Indeed, the oracle
+     returns initial results, and performs stack and reg allocation using
+     these results. Based on the program that it obtains,
+     it fixes some of the results and returns them.
+   - Second, it is called as a normal compilation pass on the results returned
+     by the oracle.
+
+   When the code is called from the OCaml oracle, all the checks
+   that are performed so that the pass can be proved correct are actually not
+   needed. We introduce this boolean [check] to deactivate some of the tests
+   when the code is called from the oracle.
+
+   TODO: deactivate more tests (or even do not use rmap) when [check] is [false]
+*)
+Variable (check : bool).
+
+Definition assert_check E b (e:E) :=
+  if check then assert b e
+  else ok tt.
 
 Section WITH_PARAMS.
 
@@ -837,29 +858,6 @@ Definition mk_ofs_int aa ws e1 :=
   let sz := mk_scale aa ws in
   if is_const e1 is Some i then Pconst (i * sz)%Z
   else (Papp2 (Omul Op_int) (Pconst sz) e1).
-
-Section CHECK.
-
-(* The code in this file is called twice.
-   - First, it is called from the stack alloc OCaml oracle. Indeed, the oracle
-     returns initial results, and performs stack and reg allocation using
-     these results. Based on the program that it obtains,
-     it fixes some of the results and returns them.
-   - Second, it is called as a normal compilation pass on the results returned
-     by the oracle.
-
-   When the code is called from the OCaml oracle, all the checks
-   that are performed so that the pass can be proved correct are actually not
-   needed. We introduce this boolean [check] to deactivate some of the tests
-   when the code is called from the oracle.
-
-   TODO: deactivate more tests (or even do not use rmap) when [check] is [false]
-*)
-Variable (check : bool).
-
-Definition assert_check E b (e:E) :=
-  if check then assert b e
-  else ok tt.
 
 Section LOCAL.
 
@@ -1294,7 +1292,7 @@ Definition incl_status_map (sm1 sm2: status_map) :=
   Mvar.incl (fun _ => incl_status) sm1 sm2.
 
 Definition incl (rmap1 rmap2:region_map) :=
-  Mvar.incl (fun x r1 r2 => sub_region_beq r1 r2) rmap1.(var_region) rmap2.(var_region) &&
+  Mvar.incl (fun x => sub_region_beq) rmap1.(var_region) rmap2.(var_region) &&
   Mr.incl (fun _ => incl_status_map) rmap1.(region_var) rmap2.(region_var).
 
 Definition merge_interval (i1 i2 : intervals) :=
@@ -1597,6 +1595,7 @@ Fixpoint alloc_i sao (trmap:table*region_map) (i: instr) : cexec (table * region
     | Cassgn r t ty e =>
       if is_sarr ty then
         Let: (table, rmap, ir) := add_iinfo ii (alloc_array_move_init table rmap r t e) in
+        let table := remove_binding_lval table r in
         ok (table, rmap, [:: MkI ii ir])
       else
         let (table, oe) :=
@@ -1613,10 +1612,12 @@ Fixpoint alloc_i sao (trmap:table*region_map) (i: instr) : cexec (table * region
 
     | Copn rs t o e =>
       if is_protect_ptr_fail rs o e is Some (r, e, msf) then
+         let table := remove_binding_lval table r in
          Let rs := alloc_protect_ptr rmap ii r t e msf in
          ok (table, rs.1, [:: MkI ii rs.2])
       else
       if is_swap_array o then
+        let table := foldl remove_binding_lval table rs in
         Let rs := add_iinfo ii (alloc_array_swap rmap rs t e) in
         ok (table, rs.1, [:: MkI ii rs.2])
       else
@@ -1641,6 +1642,7 @@ Fixpoint alloc_i sao (trmap:table*region_map) (i: instr) : cexec (table * region
       ok (table, rs.1, [:: MkI ii (Copn rs.2 t o e)])
 
     | Csyscall rs o es =>
+      let table := foldl remove_binding_lval table rs in
       Let: (rmap, c) := alloc_syscall ii rmap rs o es in
       ok (table, rmap, c)
 
@@ -1850,7 +1852,9 @@ Definition init_params mglob stack disj lmap rmap sao_params params :=
   fmapM2 (stk_ierror_no_var "invalid function info")
     (init_param mglob stack) (disj, lmap, rmap) sao_params params.
 
-Definition alloc_fd_aux p_extra mglob (fresh_reg : string -> stype -> Ident.ident) (local_alloc: funname -> stk_alloc_oracle_t) sao fd : cexec _ufundef :=
+Definition fresh_reg := fresh_var_ident (Reg (Normal, Direct)) 0.
+
+Definition alloc_fd_aux p_extra mglob (local_alloc: funname -> stk_alloc_oracle_t) sao fd : cexec _ufundef :=
   let vrip := {| vtype := sword Uptr; vname := p_extra.(sp_rip) |} in
   let vrsp := {| vtype := sword Uptr; vname := p_extra.(sp_rsp) |} in
   let vxlen := {| vtype := sword Uptr; vname := fresh_reg "__len__"%string (sword Uptr) |} in
@@ -1901,9 +1905,9 @@ Definition alloc_fd_aux p_extra mglob (fresh_reg : string -> stype -> Ident.iden
     f_res := res;
     f_extra := f_extra fd |}.
 
-Definition alloc_fd p_extra mglob (fresh_reg : string -> stype -> Ident.ident) (local_alloc: funname -> stk_alloc_oracle_t) fn fd :=
+Definition alloc_fd p_extra mglob (local_alloc: funname -> stk_alloc_oracle_t) fn fd :=
   let: sao := local_alloc fn in
-  Let fd := alloc_fd_aux p_extra mglob fresh_reg local_alloc sao fd in
+  Let fd := alloc_fd_aux p_extra mglob local_alloc sao fd in
   let f_extra := {|
         sf_align  := sao.(sao_align);
         sf_stk_sz := sao.(sao_size);
@@ -1994,8 +1998,7 @@ Definition init_map (l:list (var * wsize * Z)) data (gd:glob_decls) : cexec (Mva
                   (stk_ierror_no_var "missing globals") in
   ok mvar.
 
-Definition alloc_prog (fresh_reg : string -> stype -> Ident.ident)
-    rip rsp global_data global_alloc local_alloc (P:_uprog) : cexec _sprog :=
+Definition alloc_prog rip rsp global_data global_alloc local_alloc (P:_uprog) : cexec _sprog :=
   Let mglob := init_map  global_alloc global_data P.(p_globs) in
   let p_extra :=  {|
     sp_rip   := rip;
@@ -2004,12 +2007,12 @@ Definition alloc_prog (fresh_reg : string -> stype -> Ident.ident)
     sp_glob_names := global_alloc;
   |} in
   Let _ := assert (rip != rsp) (stk_ierror_no_var "rip and rsp clash") in
-  Let p_funs := map_cfprog_name (alloc_fd  p_extra mglob fresh_reg local_alloc) P.(p_funcs) in
+  Let p_funs := map_cfprog_name (alloc_fd p_extra mglob local_alloc) P.(p_funcs) in
   ok  {| p_funcs  := p_funs;
          p_globs := [::];
          p_extra := p_extra;
       |}.
 
-End CHECK.
-
 End WITH_PARAMS.
+
+End CHECK.

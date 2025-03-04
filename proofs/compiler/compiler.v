@@ -384,14 +384,13 @@ Definition compiler_front_end (entries: seq funname) (p: prog) : cexec sprog :=
   Let _ := check_wf_ptr entries p ao.(ao_stack_alloc) in
   Let ps :=
     stack_alloc.alloc_prog
+      true
       shparams
       saparams
       (ap_is_move_op aparams)
       (fun vk => fresh_var_ident cparams vk dummy_instr_info)
       (print_trmap cparams)
       (string_of_sr cparams)
-      true
-      (fresh_var_ident cparams (Reg (Normal, Direct)) dummy_instr_info 0)
       (global_static_data_symbol cparams)
       (stack_register_symbol cparams)
       (ao_globals ao)

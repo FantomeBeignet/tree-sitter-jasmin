@@ -6060,7 +6060,7 @@ Definition sub_region_cleared (rmap:region_map) se sr :=
         0 <= off < csx.(cs_len) ->
         ~ offset_in_concrete_slice cs (csx.(cs_ofs) + off).
 
-Lemma set_clear_sub_region_cleared rmap se sr ty :
+Lemma set_clear_pure_sub_region_cleared rmap se sr ty :
   wfr_WF rmap se ->
   wfr_STATUS rmap se ->
   wf_sub_region se sr ty ->
@@ -6152,7 +6152,7 @@ Proof.
     by apply sub_region_beq_refl.
   + by have /andP [_ +] := incl_trans hincl2 hincl_clear.
   + by apply (alloc_call_args_aux_wfr_STATUS_aux hwfsr hwfsr1 hwfst1 hallocs).
-  by apply: (set_clear_sub_region_cleared hwfsr0 hwfst0 hwf).
+  by apply: (set_clear_pure_sub_region_cleared hwfsr0 hwfst0 hwf).
 Qed.
 
 (* TODO: move? *)
@@ -7020,7 +7020,7 @@ Proof.
       by rewrite -(WArray.fill_size hfill) positive_nat_Z.
     constructor; last by constructor.
     have /set_clearP [_ ->] /= := hrmap2.
-    by apply (set_clear_sub_region_cleared wfr_wf wfr_status hwfg).
+    by apply (set_clear_pure_sub_region_cleared wfr_wf wfr_status hwfg).
 
   (* update the [scs] component *)
   set s1'' := with_scs s1 (get_random (escs s1) len).1.

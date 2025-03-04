@@ -182,6 +182,7 @@ let memory_analysis print_trmap string_of_sr pp_err ~debug up =
   let sp' =
     match
       Stack_alloc.alloc_prog
+        false
         Arch.pointer_data
         Arch.msf_size
         Arch.asmOp
@@ -191,8 +192,6 @@ let memory_analysis print_trmap string_of_sr pp_err ~debug up =
         (fun vk -> Conv.fresh_var_ident vk IInfo.dummy)
         print_rmap
         string_of_sr
-        false
-        (Conv.fresh_var_ident (Reg (Normal, Pointer Writable)) IInfo.dummy (Uint63.of_int 0))
         crip
         crsp
         gao.gao_data
