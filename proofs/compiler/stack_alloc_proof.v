@@ -290,8 +290,8 @@ Definition concrete_slice_ble (cs1 cs2 : concrete_slice) :=
 
 (* A well-formed interval can be associated to a concrete interval. *)
 Definition wf_interval se i :=
-  forall ci,
-    mapM (sem_slice se) i = ok ci -> [/\
+  exists ci, [/\
+    mapM (sem_slice se) i = ok ci,
     (* the [all] part is needed, so that concrete_slice_ble is transitive.
        We could also ask for wf_concrete_slice, but it does not work as good
        with ssreflect. *)
@@ -309,24 +309,6 @@ Definition wfr_STATUS (rmap : region_map) se :=
     Mr.get rmap.(region_var) r = Some status_map ->
     Mvar.get status_map x = Some status ->
     wf_status se status.
-
-Definition wf_sym_slice vars s :=
-  Sv.Subset (read_e s.(ss_ofs)) vars /\ Sv.Subset (read_e s.(ss_len)) vars.
-
-Definition wf_sym_interval vars (i:intervals) :=
-  List.Forall (wf_sym_slice vars) i.
-
-Definition wf_sym vars status :=
-  match status with
-  | Borrowed i => wf_sym_interval vars i
-  | _ => True
-  end.
-
-Definition wfr_SYM table rmap :=
-  forall r status_map x status,
-    Mr.get rmap.(region_var) r = Some status_map ->
-    Mvar.get status_map x = Some status ->
-    wf_sym table.(vars) status.
 
 (* This allows to read uniformly in words and arrays. *)
 Definition get_val_byte v off :=
@@ -350,8 +332,8 @@ Definition offset_in_concrete_interval ci off :=
   has (fun cs => offset_in_concrete_slice cs off) ci.
 
 Definition valid_offset_interval se i off :=
-  exists2 ci,
-    mapM (sem_slice se) i = ok ci &
+  forall ci,
+    mapM (sem_slice se) i = ok ci ->
     ~ offset_in_concrete_interval ci off.
 
 Definition valid_offset se status off : Prop :=
@@ -438,12 +420,11 @@ Definition wfr_PTR (rmap:region_map) se (s2:estate) :=
   forall x sr, Mvar.get (var_region rmap) x = Some sr ->
     exists pk, get_local pmap x = Some pk /\ valid_pk rmap se s2 sr pk.
 
-Class wf_rmap table (rmap:region_map) se (s1:estate) (s2:estate) := {
+Class wf_rmap (rmap:region_map) se (s1:estate) (s2:estate) := {
   wfr_wf  : wfr_WF rmap se;
     (* sub-regions in [rmap] are well-formed *)
   wfr_status : wfr_STATUS rmap se;
     (* statuses in [rmap] are well-formed *)
-  wfr_sym : wfr_SYM table rmap;
   wfr_val : wfr_VAL rmap se s1 s2;
     (* [rmap] remembers for each relevant program variable which part of the target
        memory contains the value that this variable has in the source. These pieces
@@ -485,7 +466,7 @@ Class valid_state table (rmap : region_map) se (m0 : mem) (s1 s2 : estate) := {
     (* registers already present in the source program store the same values
        in the source and in the target *)
   vs_wf_table    : wf_table table se s1.(evm);
-  vs_wf_region   : wf_rmap table rmap se s1 s2;
+  vs_wf_region   : wf_rmap rmap se s1 s2;
     (* cf. [wf_rmap] definition *)
   vs_eq_mem      : eq_mem_source s1.(emem) s2.(emem);
     (* the memory that is already valid in the source is the same in the target *)
@@ -556,8 +537,8 @@ Proof.
 Qed.
 
 (* A variant of [wfr_PTR] for [gvar]. *)
-Lemma wfr_gptr table rmap se s1 s2 x sr status :
-  wf_rmap table rmap se s1 s2 ->
+Lemma wfr_gptr rmap se s1 s2 x sr status :
+  wf_rmap rmap se s1 s2 ->
   check_gvalid rmap x = Some (sr, status) ->
   exists vpk, get_var_kind pmap x = ok (Some vpk)
   /\ valid_vpk rmap se s2 x.(gv) sr vpk.
@@ -2021,50 +2002,29 @@ Proof.
   by move=> ???; apply hext; right.
 Qed.
 
-Lemma wf_sym_sliceP vars se s :
-  wf_sym_slice vars s ->
-  forall vme,
-    se.(evm) =[vars] vme ->
-    sem_slice se s = sem_slice (with_vm se vme) s.
-Proof.
-  move=> [hofs hlen] vme heq.
-  rewrite /sem_slice.
-  rewrite -!read_e_eq_on_empty. done.
-  apply: eq_onI heq. SvD.fsetdec.
-  apply: eq_onI heq. SvD.fsetdec.
-Qed.
-
-Lemma wf_sym_intervalP vars se i :
-  wf_sym_interval vars i ->
-  forall vme,
-    se.(evm) =[vars] vme ->
-    mapM (sem_slice se) i = mapM (sem_slice (with_vm se vme)) i.
-Proof.
-  elim: i => [//|] s i ih /List_Forall_inv [hsym /ih{}ih] vme heq /=.
-  have <- := wf_sym_sliceP hsym heq.
-  rewrite -(ih _ heq).
-  done.
-Qed.
-
-Lemma valid_offset_interval_vm_uincl se vme i off vars :
-  se.(evm) =[vars] vme ->
-  wf_sym_interval vars i ->
+Lemma valid_offset_interval_vm_uincl se vme i off :
+  vm_uincl se.(evm) vme ->
+  wf_interval se i ->
   valid_offset_interval se i off
     <-> valid_offset_interval (with_vm se vme) i off.
 Proof.
-  move=> heq hsym. rewrite /valid_offset_interval.
-  rewrite -(wf_sym_intervalP hsym heq). done.
+  move=> huincl [ci [ok_ci _ _]].
+  have ok_ci_alt: mapM (sem_slice (with_vm se vme)) i = ok ci.
+  + apply: mapM_ext_alt ok_ci.
+    move=> s cs _ ok_cs.
+    exact: sem_slice_vm_uincl huincl ok_cs.
+  rewrite /valid_offset_interval ok_ci ok_ci_alt.
+  by split; move=> hvalid _ [<-]; apply hvalid.
 Qed.
 
-Lemma valid_offset_vm_uincl se vme status off vars :
-  se.(evm) =[vars] vme ->
-  wf_sym vars status ->
-(*   wf_status se status -> *)
+Lemma valid_offset_vm_uincl se vme status off :
+  vm_uincl se.(evm) vme ->
+  wf_status se status ->
   valid_offset se status off <-> valid_offset (with_vm se vme) status off.
 Proof.
-  move=> heq.
-  case: status => //= i hsym.
-  exact: valid_offset_interval_vm_uincl heq hsym.
+  move=> huincl.
+  case: status => //= i.
+  exact: valid_offset_interval_vm_uincl huincl.
 Qed.
 
 Lemma wf_sub_region_vm_uincl se vme sr vm :
@@ -2079,82 +2039,53 @@ Proof.
   by apply (sem_zone_vm_uincl huincl ok_cs).
 Qed.
 
-Lemma wf_status_vm_uincl se vme status vars :
-  se.(evm) =[vars] vme ->
-  wf_sym vars status ->
+Lemma wf_status_vm_uincl se vme status :
+  se.(evm) <=1 vme ->
   wf_status se status ->
   wf_status (with_vm se vme) status.
 Proof.
-  move=> heq.
-  case: status => //= i i_wf ? ci.
-  rewrite -(wf_sym_intervalP i_wf heq) => ok_ci.
-  eauto.
+  move=> huincl.
+  case: status => //= i [ci [ok_ci all_ci sorted_ci]].
+  exists ci; split=> //.
+  apply: mapM_ext_alt ok_ci.
+  by move=> s cs _; apply: sem_slice_vm_uincl huincl.
 Qed.
 
-Lemma eq_sub_region_val_vm_uincl se vme ty m sr status v vars :
-  se.(evm) =[vars] vme ->
-  se.(evm) <=1 vme -> (* do we really need both? *)
-  wf_sym vars status ->
+Lemma eq_sub_region_val_vm_uincl se vme ty m sr status v :
+  se.(evm) <=1 vme ->
   wf_sub_region se sr ty ->
-(*   wf_status se status -> *)
+  wf_status se status ->
   eq_sub_region_val ty se m sr status v ->
   eq_sub_region_val ty (with_vm se vme) m sr status v.
 Proof.
-  move=> heq huincl hsym hwf (* hwfs *) [hread hty].
+  move=> huincl hwf hwfs [hread hty].
   split=> // off addr w haddr off_valid ok_w.
   apply: hread ok_w.
   + have [cs ok_cs _] := hwf.(wfsr_zone).
     have [ofs' haddr' _] := wunsigned_sub_region_addr hwf ok_cs.
     have := sub_region_addr_vm_uincl huincl haddr'.
     by rewrite haddr => -[?]; subst ofs'.
-  by rewrite (valid_offset_vm_uincl _ heq hsym).
+  by rewrite (valid_offset_vm_uincl _ huincl hwfs).
 Qed.
 
-Lemma get_var_status_wf_sym table rmap r x :
-  wfr_SYM table rmap ->
-  wf_sym table.(vars) (get_var_status rmap r x).
-Proof.
-  move=> hsym.
-  rewrite /get_var_status /get_status /get_status_map.
-  case hr: Mr.get => [sm|//] /=.
-  case hstatus: Mvar.get => [status|//] /=. eauto.
-Qed.
-
-Lemma check_gvalid_wf_sym table rmap x sr status :
-  wfr_SYM table rmap ->
-  check_gvalid rmap x = Some (sr, status) ->
-  wf_sym table.(vars) status.
-Proof.
-  move=> hsym.
-  rewrite /check_gvalid.
-  case: is_glob.
-  + case: Mvar.get => // -[_ _] /= [_ <-].
-    done.
-  case hsr: Mvar.get => [sr'|//]. move=> [? <-]; subst sr'.
-  apply get_var_status_wf_sym. done.
-Qed.
-
-Lemma wf_rmap_vm_uincl table rmap se s1 s2 vme :
-  se.(evm) =[table.(vars)] vme ->
+Lemma wf_rmap_vm_uincl rmap se s1 s2 vme :
   se.(evm) <=1 vme ->
-  wf_rmap table rmap se s1 s2 ->
-  wf_rmap table rmap (with_vm se vme) s1 s2.
+  wf_rmap rmap se s1 s2 ->
+  wf_rmap rmap (with_vm se vme) s1 s2.
 Proof.
-  move=> heq huincl.
-  case=> hwfsr hwfst hsym hval hptr.
+  move=> huincl.
+  case=> hwfsr hwfst hval hptr.
   split=> //.
   + move=> x sr /hwfsr hwf.
     by apply (wf_sub_region_vm_uincl huincl hwf).
   + move=> r sm x status hsm hstatus.
-    have {}hsym := hsym _ _ _ _ hsm hstatus.
     have {hsm hstatus} := hwfst _ _ _ _ hsm hstatus.
-    by apply (wf_status_vm_uincl heq hsym).
+    by apply (wf_status_vm_uincl huincl).
   + move=> x sr status v hgvalid hgget.
     have {hgget} heqval := hval _ _ _ _ hgvalid hgget.
     have /= hwf := check_gvalid_wf hwfsr hgvalid.
-(*     have /= hwfs := check_gvalid_wf_status hwfst hgvalid. *)
-    apply: (eq_sub_region_val_vm_uincl heq huincl) => //.
-    apply (check_gvalid_wf_sym hsym hgvalid).
+    have /= hwfs := check_gvalid_wf_status hwfst hgvalid.
+    by apply eq_sub_region_val_vm_uincl.
   move=> x sr /[dup] hsr /hptr [pk [hget hpk]].
   exists pk; split=> //.
   case: pk hpk {hget} => //=.
@@ -2173,22 +2104,19 @@ Proof.
   by rewrite ok_ofs' => -[?]; subst ofs''.
 Qed.
 
-(*
 Lemma valid_state_vm_uincl se vme table' table rmap m0 s1 s2 :
-  se.(evm) =[table'.(vars)] vme ->
   se.(evm) <=1 vme ->
   wf_table table' (with_vm se vme) s1.(evm) ->
   valid_state table rmap se m0 s1 s2 ->
   valid_state table' rmap (with_vm se vme) m0 s1 s2.
 Proof.
-  move=> heq huincl hwft'.
+  move=> huincl hwft'.
   case=>
     /= hscs hvalid hdisj hincl hincl2 hunch hrip hrsp heqvm hwft hwfr heqmem
     hglobv htop.
   split=> //.
-  apply wf_rmap_vm_uincl. done. done.
+  by apply wf_rmap_vm_uincl.
 Qed.
-*)
 
 Lemma wf_table_set_var table se vm x v :
   wf_table table se vm ->
@@ -2223,7 +2151,7 @@ Proof.
   + by rewrite Vm.setP_neq //; assert (h:=rsp_in_new); apply/eqP => ?; subst x; apply hnin.
   + by move=> y hy hnnew; rewrite !Vm.setP heqvm.
   + by apply: wf_table_set_var hwft.
-  rewrite /with_vm /=; case: hwfr => hwfsr hwfst hsym hval hptr.
+  rewrite /with_vm /=; case: hwfr => hwfsr hwfst hval hptr.
   constructor => //.
   + move=> y sr bytes vy hy; have ? := get_localn_checkg_diff hget hptr hy.
     by rewrite get_gvar_neq //; apply hval.
@@ -2391,7 +2319,7 @@ Lemma wf_interval_add_sub_interval i1 s i2 se cs :
   0 < cs.(cs_len) ->
   wf_interval se i2.
 Proof.
-  rewrite /wf_interval. (*
+  rewrite /wf_interval.
   move=> hadd [ci1 [ok_ci1 all_ci1 sorted_ci1]] ok_cs /ZltP len_cs.
   suff: exists ci2, [/\
     mapM (sem_slice se) i2 = ok ci2,
@@ -2439,7 +2367,7 @@ Proof.
   apply /andP; split=> //.
   apply hincl.
   by apply /andP.
-Qed. *) Abort.
+Qed.
 
 Lemma add_sub_interval_1 i1 s i2 se ci2 cs off :
   add_sub_interval i1 s = Some i2 ->
@@ -2492,7 +2420,6 @@ Proof.
   by apply (ih1 _ _ _ hadd ok_ci1 ok_ci2' hin).
 Qed.
 
-(*
 Lemma wf_status_clear_status se status z cs :
   wf_status se status ->
   sem_zone se z = ok cs ->
@@ -2507,7 +2434,7 @@ Proof.
     by lia.
   case: status hwfs => //=.
   + move=> _.
-    rewrite /wf_interval /= ok_cs' /=. move=> _ [<-].
+    rewrite /wf_interval /= ok_cs' /=.
     eexists; (split; first by reflexivity) => //=.
     by rewrite !zify.
   move=> i i_wf.
@@ -2548,7 +2475,7 @@ Proof.
     add_sub_interval_1 hadd ok_cs' ok_ci' (zbetween_concrete_sliceP hb hin).
   by apply off_valid.
 Qed.
-*)
+
 Definition disjoint_symbolic_slice se s1 s2 :=
   forall cs1 cs2,
   sem_slice se s1 = ok cs1 ->
@@ -2783,7 +2710,7 @@ Proof.
   move: hincl2; rewrite /zbetween_concrete_slice /= !zify.
   by lia.
 Qed.
-(*
+
 Lemma wf_status_clear_status_map_aux se status z ty sl rmap x :
   wfr_WF rmap se ->
   wf_status se status ->
@@ -2897,7 +2824,7 @@ Proof.
   have := wf_cs.(wfcs_len).
   by lia.
 Qed.
-*)
+
 Lemma symbolic_slice_beq_refl : Reflexive symbolic_slice_beq.
 Proof.
   move=> s.
@@ -3159,378 +3086,6 @@ Proof.
   rewrite /get_var_status /get_status_map hsm /=.
   by rewrite /get_status hstatus /=.
 Qed.
-
-
-
-
-(* FIXME: we prove things about incl. Maybe we should prove sth about another
-predicate Incl with semantic meaning, i.e. parametrized by some [se] and doing
-  inclusions on concrete intervals. *)
-
-Lemma incl_interval_refl : Reflexive incl_interval.
-Proof.
-  move=> i.
-  apply /(all_nthP {| ss_ofs := 0; ss_len := 0 |}) => k hk.
-  apply /(has_nthP {| ss_ofs := 0; ss_len := 0 |}).
-  exists k => //.
-  by apply symbolic_slice_beq_refl.
-Qed.
-
-Lemma incl_status_refl : Reflexive incl_status.
-Proof.
-  move=> status.
-  case: status => //= i.
-  by apply incl_interval_refl.
-Qed.
-
-Lemma incl_status_map_refl : Reflexive incl_status_map.
-Proof.
-  move=> sm.
-  apply Mvar.inclP => x.
-  case: Mvar.get => [status|//].
-  by apply incl_status_refl.
-Qed.
-
-Lemma incl_refl : Reflexive incl.
-Proof.
-  move=> rmap.
-  apply /andP; split.
-  + apply Mvar.inclP => x.
-    case: Mvar.get => [sr|//].
-    by apply sub_region_beq_refl.
-  apply Mr.inclP => r.
-  case: Mr.get => [sm|//].
-  by apply incl_status_map_refl.
-Qed.
-
-Lemma incl_interval_trans : Transitive incl_interval.
-Proof.
-  move=> i1 i2 i3 hincl1 hincl2.
-  apply: sub_all hincl1 => s hhas2.
-  have [s' _ /andP [hhas3 heqsub]] := all_has hincl2 hhas2.
-  apply: sub_has hhas3 => s''.
-  by apply (symbolic_slice_beq_trans heqsub).
-Qed.
-
-Lemma incl_status_trans : Transitive incl_status.
-Proof.
-  case=> [||i1] [||i2] [||i3] //= hincl1 hincl2.
-  by apply (incl_interval_trans hincl2 hincl1).
-Qed.
-
-Lemma incl_status_map_trans : Transitive incl_status_map.
-Proof.
-  move=> sm1 sm2 sm3.
-  move=> /Mvar.inclP h1 /Mvar.inclP h2.
-  apply Mvar.inclP => x.
-  case heq1: Mvar.get => [status1|//].
-  have := h1 x; rewrite heq1.
-  case heq2: Mvar.get => [status2|//] hincl.
-  have := h2 x; rewrite heq2.
-  case heq3: Mvar.get => [status3|//].
-  by apply (incl_status_trans hincl).
-Qed.
-
-Lemma incl_trans : Transitive incl.
-Proof.
-  move=> rmap1 rmap2 rmap3.
-  move=> /andP [] /Mvar.inclP h12 /Mr.inclP h12'.
-  move=> /andP [] /Mvar.inclP h23 /Mr.inclP h23'.
-  apply /andP; split.
-  + apply Mvar.inclP => x.
-    case heq1: Mvar.get => [sr1|//].
-    have := h12 x; rewrite heq1.
-    case heq2: Mvar.get => [sr2|//] heqsub.
-    have := h23 x; rewrite heq2.
-    case heq3: Mvar.get => [status3|//].
-    by apply (sub_region_beq_trans heqsub).
-  apply Mr.inclP => r.
-  case heq1: Mr.get => [sm1|//].
-  have := h12' r; rewrite heq1.
-  case heq2: Mr.get => [sm2|//] hincl.
-  have := h23' r; rewrite heq2.
-  case heq3: Mr.get => [sm3|//].
-  by apply (incl_status_map_trans hincl).
-Qed.
-
-Lemma get_var_status_None rv r x :
-  Mr.get rv r = None ->
-  get_var_status rv r x = Unknown.
-Proof.
-  move=> hget.
-  rewrite /get_var_status /get_status_map hget /=.
-  by rewrite /get_status /empty_status_map Mvar.get0.
-Qed.
-
-(* This is not exactly the Prop-version of [incl]. [incl] has the disadvantage
-   that a map with dummy bindings (e.g. associating empty bytes to a var) is not
-   [incl] in the map without the dummy bindings, while equivalent from the point
-   of view of the definitions that we care about ([get_var_bytes],
-   [check_valid], [valid_state]). [Incl] avoids this pitfall.
-*)
-Definition Incl (rmap1 rmap2 : region_map) :=
-  (forall x sr, Mvar.get rmap1.(var_region) x = Some sr ->
-    exists2 sr2, Mvar.get rmap2.(var_region) x = Some sr2 & sub_region_beq sr sr2) /\
-  (forall r x, incl_status (get_var_status rmap1 r x) (get_var_status rmap2 r x)).
-
-Lemma Incl_refl : Reflexive Incl.
-Proof.
-  move=> rmap.
-  split.
-  + move=> x sr hsr; exists sr=> //.
-    by apply sub_region_beq_refl.
-  by move=> r x; apply incl_status_refl.
-Qed.
-
-Lemma Incl_trans : Transitive Incl.
-Proof.
-  move=> rmap1 rmap2 rmap3.
-  move=> [hincl11 hincl12] [hincl21 hincl22]; split.
-  + move=> x sr1 /hincl11 [sr2 /hincl21 [sr3 hsr3 heqsub2] heqsub1].
-    exists sr3 => //.
-    apply (sub_region_beq_trans heqsub1 heqsub2).
-  by move=> r x; apply (incl_status_trans (hincl12 r x) (hincl22 r x)).
-Qed.
-
-(* we use sub_region_beq sr sr2 -> sr.(sr_region) = sr2.(sr_region) *)
-Lemma Incl_check_gvalid rmap1 rmap2 x sr status :
-  Incl rmap1 rmap2 ->
-  check_gvalid rmap1 x = Some (sr, status) ->
-  exists sr2 status2, [/\
-    check_gvalid rmap2 x = Some (sr2, status2),
-    sub_region_beq sr sr2 &
-    incl_status status status2].
-Proof.
-  move=> [hincl1 hincl2].
-  rewrite /check_gvalid.
-  case: is_glob.
-  + move=> ->.
-    exists sr, status; split=> //.
-    + by apply sub_region_beq_refl.
-    by apply incl_status_refl.
-  case heq1: Mvar.get=> [sr'|//] [? <-]; subst sr'.
-  have [sr2 -> heqsub] := hincl1 _ _ heq1.
-  eexists _, _; (split; first by reflexivity) => //.
-  move: heqsub => /andP [/eqP <- _].
-  by apply hincl2.
-Qed.
-
-Lemma incl_var_region rmap1 rmap2 x sr :
-  incl rmap1 rmap2 ->
-  Mvar.get rmap1.(var_region) x = Some sr ->
-  exists2 sr2, Mvar.get rmap2.(var_region) x = Some sr2 & sub_region_beq sr sr2.
-Proof.
-  move=> /andP [hincl _] hget1.
-  have /Mvar.inclP -/(_ x) := hincl.
-  rewrite hget1.
-  case: Mvar.get => [sr2|//] heqsub.
-  by exists sr2.
-Qed.
-
-Lemma incl_get_var_status rmap1 rmap2 r x :
-  incl rmap1 rmap2 ->
-  incl_status (get_var_status rmap1 r x) (get_var_status rmap2 r x).
-Proof.
-  move=> /andP [] _ /Mr.inclP /(_ r).
-  rewrite /get_var_status /get_status_map /get_status.
-  case: Mr.get => [sm1|//].
-  case: Mr.get => [sm2|//].
-  move=> /Mvar.inclP /(_ x).
-  case: Mvar.get => [status1|//].
-  by case: Mvar.get => [status2|//].
-Qed.
-
-(* we use sub_region_beq sr sr2 -> sr.(sr_region) = sr2.(sr_region) *)
-Lemma incl_check_gvalid rmap1 rmap2 x sr status :
-  incl rmap1 rmap2 ->
-  check_gvalid rmap1 x = Some (sr, status) ->
-  exists sr2 status2, [/\
-    check_gvalid rmap2 x = Some (sr2, status2),
-    sub_region_beq sr sr2 &
-    incl_status status status2].
-Proof.
-  move=> hincl.
-  rewrite /check_gvalid.
-  case: is_glob.
-  + move=> ->.
-    exists sr, status; split=> //.
-    + by apply sub_region_beq_refl.
-    by apply incl_status_refl.
-  case heq1: Mvar.get=> [sr'|//] [? <-]; subst sr'.
-  have [sr2 -> heqsub] := incl_var_region hincl heq1.
-  eexists _, _; (split; first by reflexivity) => //.
-  case/andP: heqsub => /eqP <- _.
-  by apply: incl_get_var_status hincl.
-Qed.
-
-Lemma sub_region_beq_wf sr1 sr2 se ty :
-  sub_region_beq sr1 sr2 ->
-  wf_sub_region se sr2 ty ->
-  wf_sub_region se sr1 ty.
-Proof.
-  move=> /andP [/eqP heqr heqz] [hwfr hwfz].
-  split; rewrite heqr //.
-  case: hwfz => cs ok_cs wf_cs.
-  exists cs => //.
-  by rewrite (symbolic_zone_beq_sem_zone se heqz).
-Qed.
-
-Lemma incl_interval_test i1 i2 se ci2 :
-  incl_interval i1 i2 ->
-  mapM (sem_slice se) i2 = ok ci2 ->
-  exists2 ci1,
-    mapM (sem_slice se) i1 = ok ci1 & all (fun cs1 => has (fun cs2 => (cs1.(cs_ofs) == cs2.(cs_ofs)) && (cs1.(cs_len) == cs2.(cs_len))) ci2) ci1.
-Proof.
-  elim: i1 i2 => [|s1 i1 ih1] i2 //=.
-  + move=> _ _. eexists; first by reflexivity. done.
-  move=> /andP [h1 h2] h.
-  have /(has_nthP {| ss_ofs := 0; ss_len := 0 |}) [k1 hk1 heq1] := h1.
-  have := mapM_nth {| ss_ofs := 0; ss_len := 0 |} {| cs_ofs := 0; cs_len := 0 |} h hk1.
-  have <- := symbolic_slice_beqP se heq1. move=> ->.
-  have [ci1 ok_ci1 hh] := ih1 _ h2 h.
-  rewrite ok_ci1 => /=.
-  eexists; first by reflexivity.
-  simpl. rewrite hh andbT.
-  apply /(has_nthP {| cs_ofs := 0; cs_len := 0 |}). exists k1 => //.
-  rewrite -(size_mapM h). done. apply /andP. split. done. done.
-Qed.
-
-Lemma incl_intervalP i1 i2 se off :
-  incl_interval i1 i2 ->
-(*   wf_interval se i2 -> *)
-  valid_offset_interval se i2 off ->
-  valid_offset_interval se i1 off.
-Proof.
-  move=> hincl [ci2 ok_ci2 off_nin2].
-  have [ci1 ok_ci1 h] := incl_interval_test hincl ok_ci2.
-  exists ci1 => //.
-  move=> /(has_nthP {| cs_ofs := 0; cs_len := 0 |}) [k hk H].
-  have /(all_nthP {| cs_ofs := 0; cs_len := 0 |}) /(_ k hk) := h.
-  move=> /(has_nthP{| cs_ofs := 0; cs_len := 0 |}) [k2 hk2 HH].
-  apply off_nin2.
-  apply /(has_nthP {| cs_ofs := 0; cs_len := 0 |}). exists k2 => //.
-  move: H; rewrite /offset_in_concrete_slice.
-  move: HH => /andP [/eqP -> /eqP ->]. done.
-Qed.
-
-Lemma incl_statusP status1 status2 se off :
-  incl_status status1 status2 ->
-(*   wf_status se status1 -> *)
-  valid_offset se status1 off ->
-  valid_offset se status2 off.
-Proof.
-  case: status1 status2 => [||i1] [||i2] //=.
-  by apply incl_intervalP.
-Qed.
-
-Lemma incl_status_wf status1 status2 se :
-  incl_status status1 status2 ->
-  wf_status se status2 ->
-  wf_status se status1.
-Proof.
-  case: status1 status2 => [||i1] [||i2] //=.
-  by apply incl_intervalP.
-Qed.
-
-Lemma sub_region_beq_valid_pk sr1 sr2 rv se s2 pk :
-  sub_region_beq sr1 sr2 ->
-  valid_pk rv se s2 sr1 pk ->
-  valid_pk rv se s2 sr2 pk.
-Proof.
-  move=> heqsub.
-  case: pk.
-  + move=> s ofs ws cs sc /=.
-    by apply (sub_region_beq_trans (sub_region_beq_sym heqsub)).
-  + move=> p /= hpk addr haddr; apply hpk.
-    by rewrite (sub_region_beq_addr se heqsub).
-  move=> s ofs ws cs f /= hpk hcheck paddr addr hpaddr haddr.
-  apply (hpk hcheck paddr addr hpaddr).
-  by rewrite (sub_region_beq_addr se heqsub).
-Qed.
-
-Lemma wf_rmap_incl table rmap1 rmap2 se s1 s2 :
-  incl rmap1 rmap2 ->
-(*   wfr_STATUS rmap1 se -> *)
-  wf_rmap table rmap2 se s1 s2 ->
-  wf_rmap table rmap1 se s1 s2.
-Proof.
-  move=> hincl hwfr2.
-  case: (hwfr2) => hwfsr2 hwfst2 hsym2 hval2 hptr2; split.
-  + move=> x sr1 /(incl_var_region hincl) [sr2 hsr2 heqsub].
-    apply (sub_region_beq_wf heqsub).
-    by apply hwfsr2.
-  + apply /wfr_STATUS_alt. move=> r x. admit.
-  + move=> r sm x status.
-  + move=> x sr1 status1 v hgvalid1 hget.
-    have [sr2 [status2 [hgvalid2 heqsub {}hincl]]] :=
-      incl_check_gvalid hincl hgvalid1.
-    apply (sub_region_beq_eq_sub_region_val (sub_region_beq_sym heqsub)).
-    have [hread2 hty2] := hval2 _ _ _ _ hgvalid2 hget.
-    split=> //.
-    move=> off addr w haddr off_valid.
-    apply hread2 => //.
-    have /= hwfs1 := check_gvalid_wf_status hwfst1 hgvalid1.
-    by apply (incl_statusP hincl hwfs1 off_valid).
-  move=> x sr1 /(incl_var_region hincl) [sr2 /hptr2 [pk [hlx hpk2]] heqsub].
-  exists pk; split=> //.
-  apply (sub_region_beq_valid_pk (sub_region_beq_sym heqsub)).
-  case: pk hlx hpk2 => //= sl ofs ws cs f hlx hpk hstkptr.
-  apply hpk.
-  have := incl_get_var_status (sub_region_stkptr sl ws cs).(sr_region) f hincl.
-  move: hstkptr; rewrite /check_stack_ptr.
-  move=> /is_validP ->.
-  by case: get_var_status.
-Qed.
-
-Lemma valid_state_incl rmap1 rmap2 se table m0 s s' :
-  incl rmap1 rmap2 ->
-  wfr_STATUS rmap1 se ->
-  valid_state table rmap2 se m0 s s' ->
-  valid_state table rmap1 se m0 s s'.
-Proof.
-  move=> hincl hwfst hvs.
-  case:(hvs) => hscs hvalid hdisj hincl' hincl2 hunch hrip hrsp heqvm hwft' hwfr heqmem hglobv htop.
-  constructor=> //.
-  by apply (wf_rmap_incl hincl hwfst hwfr).
-Qed.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 (* This lemma is used both for [set_word] and [set_stack_ptr]. *)
 Lemma wfr_STATUS_set_word_pure rmap se sr x status ty :
