@@ -711,10 +711,10 @@ Definition merge_table (t1 t2 : table) :=
       end) t1.(bindings) t2.(bindings)
   in
   let n :=
-    if Uint63.leb t1.(counter) t2.(counter) then t2.(counter)
-    else t1.(counter)
+    if Uint63.leb t1.(counter) t2.(counter) then t1.(counter)
+    else t2.(counter)
   in
-  let vars := Sv.union t1.(vars) t2.(vars) in
+  let vars := Sv.inter t1.(vars) t2.(vars) in
   {| bindings := b; counter := n; vars := vars |}.
 
 (* TODO: clean & move *)
@@ -1300,34 +1300,43 @@ Definition merge_interval (i1 i2 : intervals) :=
     let%opt acc := acc in
     add_sub_interval acc s) (Some i2) i1.
 
-Definition merge_status (_x:var) (status1 status2: option status) :=
+Definition merge_status vars (_x:var) (status1 status2: option status) :=
   let%opt status1 := status1 in
   let%opt status2 := status2 in
   match status1, status2 with
-  | Unknown, _ | _, Unknown => None
-  | Valid, s | s, Valid => Some s
+  | Valid, Valid => Some Valid
+  | Valid, Borrowed i | Borrowed i, Valid =>
+    if i is [:: s] then
+      if Sv.subset (read_e s.(ss_ofs)) vars then
+        if is_const s.(ss_len) is Some len then
+          if (0 <? len)%Z then Some (Borrowed i)
+          else None
+        else None
+      else None
+    else None
   | Borrowed i1, Borrowed i2 =>
-    let%opt i := merge_interval i1 i2 in
-    Some (Borrowed i)
+    if incl_interval i1 i2 && incl_interval i2 i1 then Some (Borrowed i1)
+    else None
+  | _ , _ => None
   end.
 
-Definition merge_status_map (_r:region) (bm1 bm2: option status_map) :=
+Definition merge_status_map vars (_r:region) (bm1 bm2: option status_map) :=
   match bm1, bm2 with
   | Some bm1, Some bm2 =>
-    let bm := Mvar.map2 merge_status bm1 bm2 in
+    let bm := Mvar.map2 (merge_status vars) bm1 bm2 in
     if Mvar.is_empty bm then None
     else Some bm
   | _, _ => None
   end.
 
-Definition merge (rmap1 rmap2:region_map) :=
+Definition merge vars (rmap1 rmap2:region_map) :=
   {| var_region :=
        Mvar.map2 (fun _ osr1 osr2 =>
         match osr1, osr2 with
         | Some sr1, Some sr2 => if sub_region_beq sr1 sr2 then osr1 else None
         | _, _ => None
         end) rmap1.(var_region) rmap2.(var_region);
-     region_var := Mr.map2 merge_status_map rmap1.(region_var) rmap2.(region_var) |}.
+     region_var := Mr.map2 (merge_status_map vars) rmap1.(region_var) rmap2.(region_var) |}.
 
 Definition incl_table (table1 table2 : table) := [&&
   Mvar.incl (fun _ => eq_expr) table1.(bindings) table2.(bindings),
@@ -1344,7 +1353,10 @@ Fixpoint loop2 (n:nat) table (rmap:region_map) :=
   | S n =>
     Let: ((table1, rmap1), (table2, rmap2), c) := check_c2 table rmap in
     if incl_table table table2 && incl rmap rmap2 then ok (table1, rmap1, c)
-    else loop2 n (merge_table table table2) (merge rmap rmap2)
+    else
+      let table := merge_table table table2 in
+      let rmap := merge table.(vars) rmap rmap2 in
+      loop2 n table rmap
   end.
 
 End LOOP.
@@ -1651,7 +1663,7 @@ Fixpoint alloc_i sao (trmap:table*region_map) (i: instr) : cexec (table * region
       Let: (table1, rmap1, c1) := fmapM (alloc_i sao) (table, rmap) c1 in
       Let: (table2, rmap2, c2) := fmapM (alloc_i sao) (table, rmap) c2 in
       let table := merge_table table1 table2 in
-      let rmap := merge rmap1 rmap2 in
+      let rmap := merge table.(vars) rmap1 rmap2 in
       ok (table, rmap, [:: MkI ii (Cif e (flatten c1) (flatten c2))])
 
     | Cwhile a c1 e c2 =>
