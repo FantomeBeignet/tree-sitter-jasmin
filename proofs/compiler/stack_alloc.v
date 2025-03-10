@@ -118,6 +118,57 @@ Module Mr := Mmake CmpR.
 (* ------------------------------------------------------------------ *)
 (* Slice and zone *)
 
+Inductive sexpr :=
+| Sconst : Z -> sexpr
+| Svar : var -> sexpr
+| Sof_int : wsize -> sexpr -> sexpr
+| Sto_int : wsize -> sexpr -> sexpr
+| Sneg : op_kind -> sexpr -> sexpr
+| Sadd : op_kind -> sexpr -> sexpr -> sexpr
+| Smul : op_kind -> sexpr -> sexpr -> sexpr
+| Ssub : op_kind -> sexpr -> sexpr -> sexpr.
+
+Lemma op_kind_eq_axiom : Equality.axiom internal_op_kind_beq.
+Proof.
+  exact: (eq_axiom_of_scheme internal_op_kind_dec_bl internal_op_kind_dec_lb).
+Qed.
+
+HB.instance Definition _ := hasDecEq.Build op_kind op_kind_eq_axiom.
+
+Fixpoint sexpr_beq (e1 e2 : sexpr) :=
+  match e1, e2 with
+  | Sconst n1, Sconst n2 => n1 == n2
+  | Svar x1, Svar x2 => x1 == x2
+  | Sof_int ws1 e1, Sof_int ws2 e2 => [&& ws1 == ws2 & sexpr_beq e1 e2]
+  | Sto_int ws1 e1, Sto_int ws2 e2 => [&& ws1 == ws2 & sexpr_beq e1 e2]
+  | Sneg opk1 e1, Sneg opk2 e2 => [&& opk1 == opk2 & sexpr_beq e1 e2]
+  | Sadd opk1 e11 e12, Sadd opk2 e21 e22 => [&& opk1 == opk2, sexpr_beq e11 e21 & sexpr_beq e12 e22]
+  | Smul opk1 e11 e12, Smul opk2 e21 e22 => [&& opk1 == opk2, sexpr_beq e11 e21 & sexpr_beq e12 e22]
+  | Ssub opk1 e11 e12, Ssub opk2 e21 e22 => [&& opk1 == opk2, sexpr_beq e11 e21 & sexpr_beq e12 e22]
+  | _, _ => false
+  end.
+
+Lemma sexpr_eq_axiom : Equality.axiom sexpr_beq.
+Proof.
+  elim=>
+      [z1|x1|ws1 e1 ih1|ws1 e1 ih1|opk1 e1 ih1|opk1 e11 ih11 e12 ih12|opk1 e11 ih11 e12 ih12|opk1 e11 ih11 e12 ih12]
+      [z2|x2|ws2 e2    |ws2 e2    |opk2 e2    |opk2 e21      e22     |opk2 e21      e22     |opk2 e21      e22     ] /=;
+    try (right; congruence).
+  + by apply (iffP eqP); congruence.
+  + by apply (iffP eqP); congruence.
+  + by apply (iffP andP) => -[/eqP -> /ih1 ->].
+  + by apply (iffP andP) => -[/eqP -> /ih1 ->].
+  + by apply (iffP andP) => -[/eqP -> /ih1 ->].
+  + by apply (iffP and3P) => -[/eqP -> /ih11 -> /ih12 ->].
+  + by apply (iffP and3P) => -[/eqP -> /ih11 -> /ih12 ->].
+  by apply (iffP and3P) => -[/eqP -> /ih11 -> /ih12 ->].
+Qed.
+
+HB.instance Definition _ := hasDecEq.Build sexpr sexpr_eq_axiom.
+
+Definition is_const e :=
+  if e is Sconst n then Some n else None.
+
 (* A slice represents a contiguous portion of memory.
   In [symbolic_slice], the components are symbolic expressions; symbolic
   slices are used in the analysis, since we do not necessarily know the
@@ -125,12 +176,21 @@ Module Mr := Mmake CmpR.
 *)
 (* We reuse [pexpr], but only the arithmetic part is of interest here. *)
 Record symbolic_slice := {
-  ss_ofs : pexpr;
-  ss_len : pexpr;
+  ss_ofs : sexpr;
+  ss_len : sexpr;
 }.
 
 Definition symbolic_slice_beq s1 s2 :=
-  eq_expr s1.(ss_ofs) s2.(ss_ofs) && eq_expr s1.(ss_len) s2.(ss_len).
+  (s1.(ss_ofs) == s2.(ss_ofs)) && (s1.(ss_len) == s2.(ss_len)).
+
+Lemma symbolic_slice_eq_axiom : Equality.axiom symbolic_slice_beq.
+Proof.
+  case=> [ofs1 len1] [ofs2 len2].
+  rewrite /symbolic_slice_beq /=.
+  by apply (iffP andP) => -[/eqP -> /eqP ->].
+Qed.
+
+HB.instance Definition _ := hasDecEq.Build symbolic_slice symbolic_slice_eq_axiom.
 
 (* A symbolic zone is a memory portion written as a list of symbolic slices,
    each slice being included in the previous one.
@@ -139,9 +199,6 @@ Definition symbolic_slice_beq s1 s2 :=
    to remember some structure.
 *)
 Definition symbolic_zone := seq symbolic_slice.
-
-Definition symbolic_zone_beq :=
-  all2 symbolic_slice_beq.
 
 
 (* ------------------------------------------------------------------ *)
@@ -154,7 +211,16 @@ Record sub_region := {
 
 Definition sub_region_beq sr1 sr2 :=
   (sr1.(sr_region) == sr2.(sr_region)) &&
-  symbolic_zone_beq sr1.(sr_zone) sr2.(sr_zone).
+  (sr1.(sr_zone) == sr2.(sr_zone)).
+
+Lemma sub_region_eq_axiom : Equality.axiom sub_region_beq.
+Proof.
+  case=> [r1 z1] [r2 z2].
+  rewrite /sub_region_beq /=.
+  by apply (iffP andP) => -[/eqP -> /eqP ->].
+Qed.
+
+HB.instance Definition _ := hasDecEq.Build sub_region sub_region_eq_axiom.
 
 
 (* ------------------------------------------------------------------ *)
@@ -367,8 +433,8 @@ Definition divide_z z ws :=
 
 Definition divide e ws :=
   match e with
-  | Pconst z => divide_z z ws
-  | Papp2 (Omul _) e1 e2 =>
+  | Sconst z => divide_z z ws
+  | Smul _ e1 e2 =>
     (if is_const e1 is Some z1 then divide_z z1 ws else false) ||
     (if is_const e2 is Some z2 then divide_z z2 ws else false)
   | _ => false
@@ -416,7 +482,7 @@ Definition check_valid x status :=
 
 Fixpoint split_last z :=
   match z with
-  | [::] => ([::], {| ss_ofs := Pconst 0; ss_len := Pconst 0 |}) (* impossible *)
+  | [::] => ([::], {| ss_ofs := Sconst 0; ss_len := Sconst 0 |}) (* impossible *)
   | [:: s] => ([::], s)
   | s :: z =>
     let: (z, last) := split_last z in
@@ -430,7 +496,8 @@ Definition sub_zone_at_ofs (z:symbolic_zone) ofs len :=
   (* TODO: z is never nil, but check this *)
   let: (z', s) := split_last z in
     match is_const s.(ss_ofs), is_const s.(ss_len), is_const ofs, is_const len with
-    | Some sofs, Some slen, Some ofs, Some len => z' ++ [:: {| ss_ofs := Pconst (sofs + ofs); ss_len := len |}]
+    | Some sofs, Some slen, Some ofs, Some len =>
+      z' ++ [:: {| ss_ofs := Sconst (sofs + ofs); ss_len := Sconst len |}]
     | _, _, _, _ =>
       z ++ [:: {| ss_ofs := ofs; ss_len := len |}]
     end.
@@ -451,7 +518,7 @@ Definition get_sub_status (status:status) s :=
   end.
 
 Definition sub_region_status_at_ofs (x:var_i) sr status ofs len :=
-  if eq_expr ofs (Pconst 0) && eq_expr len (Pconst (size_slot x)) then
+  if (ofs == Sconst 0) && (len == Sconst (size_slot x)) then
     (sr, status)
   else
     let sr := sub_region_at_ofs sr ofs len in
@@ -487,7 +554,7 @@ Fixpoint get_suffix (z1 z2 : symbolic_zone) : option (option symbolic_zone) :=
             (* special case when this is the full zone *)
             if ((ofs == 0) && (len == len1))%Z then Some (Some [::])
             else
-              Some (Some [:: {| ss_ofs := ofs; ss_len := len |}])
+              Some (Some [:: {| ss_ofs := Sconst ofs; ss_len := Sconst len |}])
           | _, _, _, _ => None
           end
         else None
@@ -585,10 +652,10 @@ Definition set_move (rmap:region_map) x sr status :=
      region_var := rv |}.
 
 Definition insert_status x status ofs len statusy :=
-  if eq_expr ofs (Pconst 0) && eq_expr len (Pconst (size_slot x)) then statusy
+  if (ofs == Sconst 0) && (len == Sconst (size_slot x)) then statusy
   else
     let s := {| ss_ofs := ofs; ss_len := len |} in
-    if get_sub_status statusy {| ss_ofs := 0%Z; ss_len := len |} then
+    if get_sub_status statusy {| ss_ofs := Sconst 0; ss_len := len |} then
       fill_status status s
     else
       odflt Unknown (clear_status status [:: s]).
@@ -599,7 +666,7 @@ Definition set_move_sub (rmap:region_map) r x status ofs len substatus :=
      region_var := rv |}.
 
 Definition zone_of_cs cs : symbolic_zone :=
-  [:: {| ss_ofs := Pconst cs.(cs_ofs); ss_len := Pconst cs.(cs_len) |}].
+  [:: {| ss_ofs := Sconst cs.(cs_ofs); ss_len := Sconst cs.(cs_len) |}].
 
 Definition sub_region_stkptr s ws cs :=
   let r := {| r_slot := s; r_align := ws; r_writable := true |} in
@@ -617,7 +684,7 @@ Definition check_stack_ptr rv s ws cs x' :=
   is_valid status.
 
 Definition sub_region_full x r :=
-  let z := [:: {| ss_ofs := Pconst 0; ss_len := Pconst (size_slot x) |}] in
+  let z := [:: {| ss_ofs := Sconst 0; ss_len := Sconst (size_slot x) |}] in
   {| sr_region := r; sr_zone := z |}.
 
 Definition sub_region_glob x ws :=
@@ -646,7 +713,7 @@ Definition get_gsub_region_status rmap (x:var_i) vpk :=
 (* Symbolic analysis *)
 
 Record table := {
-  bindings : Mvar.t pexpr;
+  bindings : Mvar.t sexpr;
     (* A symbolic expression can be associated to any program variable.
        We reuse [pexpr] for the type of symbolic expressions, because it is
        convenient. We ensure that the variables appearing in the symbolic
@@ -664,7 +731,7 @@ Record table := {
 
 Section CLONE.
 
-Context (clone : var_i -> int -> var_i).
+Context (clone : var -> int -> var).
 
 (* Add a mapping inside a table, but checks before that the program variable is
    not fresh. *)
@@ -690,13 +757,13 @@ Definition table_fresh_var t x :=
          vars := Sv.add x' t.(vars)
       |}
     in
-    let e := Pvar (mk_lvar x') in
+    let e := Svar x' in
     let%opt table := table_set_var t x e in
     Some (table, e).
 
 (* Reads variable [x] in the table, and returns the associated expression if
    [x] is present, or generates a fresh binding if [x] is not present. *)
-Definition table_get_var t (x:var_i) :=
+Definition table_get_var t x :=
   match Mvar.get t.(bindings) x with
   | Some e => Some (t, e)
   | None => table_fresh_var t x
@@ -706,7 +773,7 @@ Definition merge_table (t1 t2 : table) :=
   let b :=
     Mvar.map2 (fun _ osp1 osp2 =>
       match osp1, osp2 with
-      | Some sp1, Some sp2 => if eq_expr sp1 sp2 then osp1 else None
+      | Some sp1, Some sp2 => if sp1 == sp2 then osp1 else None
       | _, _ => None
       end) t1.(bindings) t2.(bindings)
   in
@@ -731,25 +798,33 @@ Definition fmapo :=
 
 Fixpoint symbolic_of_pexpr t e :=
   match e with
-  | Pconst _ | Pbool _ => Some (t, e)
+  | Pconst n => Some (t, Sconst n)
   | Pvar x =>
     if is_lvar x then table_get_var t x.(gv)
     else None
   | Papp1 op e =>
+    let%opt op :=
+      match op with
+      | Oint_of_word ws => Some (Sto_int ws)
+      | Oword_of_int ws => Some (Sof_int ws)
+      | Oneg opk => Some (Sneg opk)
+      | _ => None
+      end
+    in
     let%opt (t, e) := symbolic_of_pexpr t e in
-    Some (t, Papp1 op e)
+    Some (t, op e)
   | Papp2 op e1 e2 =>
+    let%opt op :=
+      match op with
+      | Oadd opk => Some (Sadd opk)
+      | Omul opk => Some (Smul opk)
+      | Osub opk => Some (Ssub opk)
+      | _ => None
+      end
+    in
     let%opt (t, e1) := symbolic_of_pexpr t e1 in
     let%opt (t, e2) := symbolic_of_pexpr t e2 in
-    Some (t, Papp2 op e1 e2)
-  | PappN op es =>
-    let%opt (t, es) := fmapo symbolic_of_pexpr t es in
-    Some (t, PappN op es)
-  | Pif ty b e1 e2 =>
-    let%opt (t, b) := symbolic_of_pexpr t b in
-    let%opt (t, e1) := symbolic_of_pexpr t e1 in
-    let%opt (t, e2) := symbolic_of_pexpr t e2 in
-    Some (t, Pif ty b e1 e2)
+    Some (t, op e1 e2)
   | _ => None
   end.
 
@@ -831,11 +906,11 @@ Context
   (string_of_sr : sub_region -> string)
 .
 
-Definition clone (x:var_i) n :=
+Definition clone (x:var) n :=
   let xn :=
     fresh_var_ident (Ident.id_kind x.(vname)) n (Ident.id_name x.(vname)) x.(vtype)
   in
-  {| v_var := {| vtype := x.(vtype); vname := xn |}; v_info := x.(v_info) |}.
+  {| vtype := x.(vtype); vname := xn |}.
 
 Notation symbolic_of_pexpr := (symbolic_of_pexpr clone).
 Notation get_symbolic_of_pexpr := (get_symbolic_of_pexpr clone).
@@ -848,7 +923,7 @@ Definition add := Papp2 (Oadd (Op_w Uptr)).
 (* It seems indeed that it is an optim, mk_lea recognize that it is a constant. *)
 Definition mk_ofs aa ws e1 ofs :=
   let sz := mk_scale aa ws in
-  if is_const e1 is Some i then
+  if expr.is_const e1 is Some i then
     cast_const (i * sz + ofs)%Z
   else
     add (mul (cast_const sz) (cast_ptr e1)) (cast_const ofs).
@@ -856,8 +931,8 @@ Definition mk_ofs aa ws e1 ofs :=
 (* For the symbolic analysis *)
 Definition mk_ofs_int aa ws e1 :=
   let sz := mk_scale aa ws in
-  if is_const e1 is Some i then Pconst (i * sz)%Z
-  else (Papp2 (Omul Op_int) (Pconst sz) e1).
+  if is_const e1 is Some i then Sconst (i * sz)%Z
+  else Smul Op_int (Sconst sz) e1.
 
 Section LOCAL.
 
@@ -1054,7 +1129,7 @@ Definition nop := Copn [::] AT_none sopn_nop [::].
    assign it again, and a nop is issued. *)
 Definition is_nop rmap x (sry:sub_region) s ws cs f : bool :=
   if Mvar.get rmap.(var_region) x is Some srx then
-    (sub_region_beq srx sry) && check_stack_ptr rmap s ws cs f
+    (srx == sry) && check_stack_ptr rmap s ws cs f
   else false.
 
 Definition get_addr (x:var_i) dx tag vpk y ofs :=
@@ -1119,7 +1194,7 @@ Definition alloc_array_move table rmap r tag e :=
         Let: (sr, status) := get_gsub_region_status rmap yv vpk in
         Let: (table, se1) := get_symbolic_of_pexpr table e1 in
         let ofs := mk_ofs_int aa ws se1 in
-        let len := Pconst (arr_size ws len) in
+        let len := Sconst (arr_size ws len) in
         let (sr, status) := sub_region_status_at_ofs yv sr status ofs len in
         Let eofs := addr_from_vpk_pexpr rmap yv vpk in
         Let e1 := alloc_e rmap e1 sint in
@@ -1138,7 +1213,7 @@ Definition alloc_array_move table rmap r tag e :=
       | Pdirect s _ ws cs sc =>
         let sr := sub_region_direct s ws cs sc in
         Let _  :=
-          assert (sub_region_beq sry sr)
+          assert (sry == sr)
                  (stk_ierror x
                     (pp_box [::
                       pp_s "the assignment to array"; pp_var x;
@@ -1179,10 +1254,10 @@ Definition alloc_array_move table rmap r tag e :=
       Let: (sr, status) := get_sub_region_status rmap x in
       Let: (table, e) := get_symbolic_of_pexpr table e in
       let ofs := mk_ofs_int aa ws e in
-      let len := Pconst (arr_size ws len) in
+      let len := Sconst (arr_size ws len) in
       let (sr', _) := sub_region_status_at_ofs x sr status ofs len in
       Let _ :=
-        assert (sub_region_beq sry sr')
+        assert (sry == sr')
                (stk_ierror x
                  (pp_box [::
                    pp_s "the assignment to sub-array"; pp_var x;
@@ -1292,7 +1367,7 @@ Definition incl_status_map (sm1 sm2: status_map) :=
   Mvar.incl (fun _ => incl_status) sm1 sm2.
 
 Definition incl (rmap1 rmap2:region_map) :=
-  Mvar.incl (fun x => sub_region_beq) rmap1.(var_region) rmap2.(var_region) &&
+  Mvar.incl (fun _ => eq_op) rmap1.(var_region) rmap2.(var_region) &&
   Mr.incl (fun _ => incl_status_map) rmap1.(region_var) rmap2.(region_var).
 
 Definition merge_interval (i1 i2 : intervals) :=
@@ -1300,46 +1375,37 @@ Definition merge_interval (i1 i2 : intervals) :=
     let%opt acc := acc in
     add_sub_interval acc s) (Some i2) i1.
 
-Definition merge_status vars (_x:var) (status1 status2: option status) :=
+Definition merge_status (_x:var) (status1 status2: option status) :=
   let%opt status1 := status1 in
   let%opt status2 := status2 in
   match status1, status2 with
-  | Valid, Valid => Some Valid
-  | Valid, Borrowed i | Borrowed i, Valid =>
-    if i is [:: s] then
-      if Sv.subset (read_e s.(ss_ofs)) vars then
-        if is_const s.(ss_len) is Some len then
-          if (0 <? len)%Z then Some (Borrowed i)
-          else None
-        else None
-      else None
-    else None
+  | Unknown, _ | _, Unknown => None
+  | Valid, s | s, Valid => Some s
   | Borrowed i1, Borrowed i2 =>
-    if incl_interval i1 i2 && incl_interval i2 i1 then Some (Borrowed i1)
-    else None
-  | _ , _ => None
+    let%opt i := merge_interval i1 i2 in
+    Some (Borrowed i)
   end.
 
-Definition merge_status_map vars (_r:region) (bm1 bm2: option status_map) :=
+Definition merge_status_map (_r:region) (bm1 bm2: option status_map) :=
   match bm1, bm2 with
   | Some bm1, Some bm2 =>
-    let bm := Mvar.map2 (merge_status vars) bm1 bm2 in
+    let bm := Mvar.map2 merge_status bm1 bm2 in
     if Mvar.is_empty bm then None
     else Some bm
   | _, _ => None
   end.
 
-Definition merge vars (rmap1 rmap2:region_map) :=
+Definition merge (rmap1 rmap2:region_map) :=
   {| var_region :=
        Mvar.map2 (fun _ osr1 osr2 =>
         match osr1, osr2 with
-        | Some sr1, Some sr2 => if sub_region_beq sr1 sr2 then osr1 else None
+        | Some sr1, Some sr2 => if sr1 == sr2 then osr1 else None
         | _, _ => None
         end) rmap1.(var_region) rmap2.(var_region);
-     region_var := Mr.map2 (merge_status_map vars) rmap1.(region_var) rmap2.(region_var) |}.
+     region_var := Mr.map2 merge_status_map rmap1.(region_var) rmap2.(region_var) |}.
 
 Definition incl_table (table1 table2 : table) := [&&
-  Mvar.incl (fun _ => eq_expr) table1.(bindings) table2.(bindings),
+  Mvar.incl (fun _ => eq_op) table1.(bindings) table2.(bindings),
   Uint63.leb table1.(counter) table2.(counter) &
   Sv.subset table1.(vars) table2.(vars)].
 
@@ -1355,7 +1421,7 @@ Fixpoint loop2 (n:nat) table (rmap:region_map) :=
     if incl_table table table2 && incl rmap rmap2 then ok (table1, rmap1, c)
     else
       let table := merge_table table table2 in
-      let rmap := merge table.(vars) rmap rmap2 in
+      let rmap := merge rmap rmap2 in
       loop2 n table rmap
   end.
 
@@ -1663,7 +1729,7 @@ Fixpoint alloc_i sao (trmap:table*region_map) (i: instr) : cexec (table * region
       Let: (table1, rmap1, c1) := fmapM (alloc_i sao) (table, rmap) c1 in
       Let: (table2, rmap2, c2) := fmapM (alloc_i sao) (table, rmap) c2 in
       let table := merge_table table1 table2 in
-      let rmap := merge table.(vars) rmap1 rmap2 in
+      let rmap := merge rmap1 rmap2 in
       ok (table, rmap, [:: MkI ii (Cif e (flatten c1) (flatten c2))])
 
     | Cwhile a c1 e c2 =>
@@ -1808,7 +1874,7 @@ Definition check_result pmap rmap paramsi params oi (x:var_i) :=
                       (stk_ierror_no_var "reg ptr in result not corresponding to a parameter") in
       Let: (sr, status) := get_sub_region_status rmap x in
       Let _ := check_valid x status in
-      Let _  := assert (sub_region_beq sr_param sr) (stk_ierror_no_var "invalid reg ptr in result") in
+      Let _  := assert (sr_param == sr) (stk_ierror_no_var "invalid reg ptr in result") in
       Let p  := get_regptr pmap x in
       ok p
     | None => Error (stk_ierror_no_var "invalid function info")
