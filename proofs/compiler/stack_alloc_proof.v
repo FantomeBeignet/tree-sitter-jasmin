@@ -5,7 +5,6 @@ From mathcomp Require Import word_ssrZ.
 Require Import seq_extra psem psem_facts compiler_util low_memory.
 Require Export stack_alloc.
 Require slh_lowering_proof.
-Require Import byteset.
 Import Utf8 Lia.
 
 Set Implicit Arguments.
@@ -205,23 +204,74 @@ Definition wft_VARS table :=
     Mvar.get table.(bindings) x = Some e ->
     Sv.Subset (read_e e) table.(vars).
 
-Definition wft_UNDEF table vme :=
+Definition wft_DEF table vme :=
   forall x,
-    ~ Sv.In x table.(vars) ->
-    vme.[x] = undef_addr x.(vtype).
+    Sv.In x table.(vars) ->
+    exists2 v, get_var true vme x = ok v & type_of_val v = x.(vtype).
 
-Definition wft_SEM table se vm1 :=
+Fixpoint sem_sexpr vme (e : sexpr) :=
+  match e with
+  | Sconst z => ok (Vint z)
+  | Svar v => get_var true vme v
+  | Sof_int ws e =>
+    Let v := sem_sexpr vme e in
+    sem_sop1 (Oword_of_int ws) v
+  | Sto_int ws e =>
+    Let v := sem_sexpr vme e in
+    sem_sop1 (Oint_of_word ws) v
+  | Sneg opk e =>
+    Let v := sem_sexpr vme e in
+    sem_sop1 (Oneg opk) v
+  | Sadd opk e1 e2 =>
+    Let v1 := sem_sexpr vme e1 in
+    Let v2 := sem_sexpr vme e2 in
+    sem_sop2 (Oadd opk) v1 v2
+  | Smul opk e1 e2 =>
+    Let v1 := sem_sexpr vme e1 in
+    Let v2 := sem_sexpr vme e2 in
+    sem_sop2 (Omul opk) v1 v2
+  | Ssub opk e1 e2 =>
+    Let v1 := sem_sexpr vme e1 in
+    Let v2 := sem_sexpr vme e2 in
+    sem_sop2 (Osub opk) v1 v2
+  end.
+
+(* TODO: rewrite value_uincl vm1.[x] ?? *)
+Definition wft_SEM table vme vm1 :=
   forall x e v1,
     Mvar.get table.(bindings) x = Some e ->
     get_var true vm1 x = ok v1 ->
     exists2 v2,
-      sem_pexpr true [::] se e = ok v2 &
+      sem_sexpr vme e = ok v2 &
       value_uincl v1 v2.
+(*
+Definition same_type_head ty1 ty2 :=
+  match ty1, ty2 with
+  | sbool, sbool => true
+  | sint, sint => true
+  | sarr _, sarr _ => true
+  | sword _, sword _ => true
+  | _, _ => false
+  end.
 
-Record wf_table table se vm1 := {
+Definition always_sem e ty :=
+  forall vme,
+    Sv.For_all (fun y => is_defined vme.[y]) (read_e e) ->
+    exists v, [/\
+      sem_sexpr vme e = ok v,
+      is_defined v &
+      same_type_head (type_of_val v) ty].
+
+Definition wft_ALWAYS table :=
+  forall x e,
+    Mvar.get table.(bindings) x = Some e ->
+    always_sem e (vtype x).
+*)
+Record wf_table table vme vm1 := {
   wft_vars : wft_VARS table;
-  wft_undef : wft_UNDEF table se.(evm);
-  wft_sem : wft_SEM table se vm1;
+  wft_undef : wft_DEF table vme;
+  wft_sem : wft_SEM table vme vm1;
+(*   wft_always : wft_ALWAYS table; *)
 }.
 
 (* Well-formedness of a [region]. *)
@@ -233,9 +283,9 @@ Record wf_region (r : region) := {
 
 (* We interpret a symbolic_slice as a concrete_slice *)
 (* [se] is for symbolic estate *)
-Definition sem_slice (se:estate) (s : symbolic_slice) : result error concrete_slice :=
-  Let ofs := sem_pexpr true [::] se s.(ss_ofs) >>= to_int in
-  Let len := sem_pexpr true [::] se s.(ss_len) >>= to_int in
+Definition sem_slice vme (s : symbolic_slice) : result error concrete_slice :=
+  Let ofs := sem_sexpr vme s.(ss_ofs) >>= to_int in
+  Let len := sem_sexpr vme s.(ss_len) >>= to_int in
   ok {| cs_ofs := ofs; cs_len := len |}.
 
 Definition sub_concrete_slice cs1 cs2 :=
@@ -285,8 +335,27 @@ Definition wfr_WF (rmap : region_map) se :=
     Mvar.get rmap.(var_region) x = Some sr ->
     wf_sub_region se sr x.(vtype).
 
+Definition read_interval (i:intervals) :=
+  foldr (fun s acc => Sv.union (read_slice s) acc) Sv.empty i.
+
+Definition wf_vars_interval vars i :=
+  Sv.Subset (read_interval i) vars.
+
+Definition wf_vars vars status :=
+  match status with
+  | Borrowed i => wf_vars_interval vars i
+  | _ => True
+  end.
+
+Definition wfr_VARS vars rv :=
+  forall r x, wf_vars vars (get_var_status rv r x).
+
 Definition concrete_slice_ble (cs1 cs2 : concrete_slice) :=
   (cs1.(cs_ofs) + cs1.(cs_len) <=? cs2.(cs_ofs))%Z.
+
+(*
+Definition wf_interval i :=
+  path.sorted symbolic_slice_ble i.
 
 (* A well-formed interval can be associated to a concrete interval. *)
 Definition wf_interval se i :=
@@ -309,6 +378,7 @@ Definition wfr_STATUS (rmap : region_map) se :=
     Mr.get rmap.(region_var) r = Some status_map ->
     Mvar.get status_map x = Some status ->
     wf_status se status.
+*)
 
 (* This allows to read uniformly in words and arrays. *)
 Definition get_val_byte v off :=
@@ -404,7 +474,7 @@ Definition wfr_VAL (rmap:region_map) se (s1:estate) (s2:estate) :=
 Definition valid_pk rmap se (s2:estate) sr pk : Prop :=
   match pk with
   | Pdirect s ofs ws cs sc =>
-    sub_region_beq sr (sub_region_direct s ws cs sc)
+    sr = sub_region_direct s ws cs sc
   | Pstkptr s ofs ws cs f =>
     check_stack_ptr rmap s ws cs f ->
     forall pofs ofs,
@@ -420,10 +490,12 @@ Definition wfr_PTR (rmap:region_map) se (s2:estate) :=
   forall x sr, Mvar.get (var_region rmap) x = Some sr ->
     exists pk, get_local pmap x = Some pk /\ valid_pk rmap se s2 sr pk.
 
-Class wf_rmap (rmap:region_map) se (s1:estate) (s2:estate) := {
+Class wf_rmap vars (rmap:region_map) se (s1:estate) (s2:estate) := {
   wfr_wf  : wfr_WF rmap se;
     (* sub-regions in [rmap] are well-formed *)
-  wfr_status : wfr_STATUS rmap se;
+  wfr_vars : wfr_VARS vars rmap;
+(*   wfr_always : wfr_ALWAYS rmap; *)
+(*   wfr_status : wfr_STATUS rmap se; *)
     (* statuses in [rmap] are well-formed *)
   wfr_val : wfr_VAL rmap se s1 s2;
     (* [rmap] remembers for each relevant program variable which part of the target
@@ -445,7 +517,7 @@ Hypothesis wf_pmap0 : wf_pmap.
    [s1]: current source estate
    [s2]: current target estate
 *)
-Class valid_state table (rmap : region_map) se (m0 : mem) (s1 s2 : estate) := {
+Class valid_state table (rmap : region_map) vme (m0 : mem) (s1 s2 : estate) := {
   vs_scs         : s1.(escs) = s2.(escs);
   vs_slot_valid  : slot_valid s2.(emem);
     (* slots are valid in the target *)
@@ -465,8 +537,8 @@ Class valid_state table (rmap : region_map) se (m0 : mem) (s1 s2 : estate) := {
   vs_eq_vm       : eq_vm s1.(evm) s2.(evm);
     (* registers already present in the source program store the same values
        in the source and in the target *)
-  vs_wf_table    : wf_table table se s1.(evm);
-  vs_wf_region   : wf_rmap rmap se s1 s2;
+  vs_wf_table    : wf_table table vme s1.(evm);
+  vs_wf_region   : wf_rmap table.(vars) rmap vme s1 s2;
     (* cf. [wf_rmap] definition *)
   vs_eq_mem      : eq_mem_source s1.(emem) s2.(emem);
     (* the memory that is already valid in the source is the same in the target *)
@@ -502,6 +574,7 @@ Proof.
   by case heq: Mvar.get => // -[<-]; apply hwfr.
 Qed.
 
+(*
 Lemma get_var_status_wf_status rmap se r x :
   wfr_STATUS rmap se ->
   wf_status se (get_var_status rmap r x).
@@ -523,6 +596,7 @@ Proof.
   + by case heq: Mvar.get => [[??]|//] [<-] /=.
   by case heq: Mvar.get => // -[<-]; apply: get_var_status_wf_status hwfs.
 Qed.
+*)
 
 Definition valid_vpk rv se s2 x sr vpk :=
   match vpk with
@@ -537,8 +611,8 @@ Proof.
 Qed.
 
 (* A variant of [wfr_PTR] for [gvar]. *)
-Lemma wfr_gptr rmap se s1 s2 x sr status :
-  wf_rmap rmap se s1 s2 ->
+Lemma wfr_gptr vars rmap se s1 s2 x sr status :
+  wf_rmap vars rmap se s1 s2 ->
   check_gvalid rmap x = Some (sr, status) ->
   exists vpk, get_var_kind pmap x = ok (Some vpk)
   /\ valid_vpk rmap se s2 x.(gv) sr vpk.
@@ -876,13 +950,20 @@ Proof.
   rewrite !zify. lia.
 Qed.
 
-Lemma sub_zone_at_ofsP se z cs ty sl ofs ofsi ty2 :
-  sem_zone se z = ok cs ->
+Variant is_reflect A (P0 : A -> sexpr) : sexpr -> option A -> Prop :=
+| Is_reflect_some : forall a, is_reflect P0 (P0 a) (Some a)
+| Is_reflect_none : forall e, is_reflect P0 e None.
+
+Lemma is_constP e : is_reflect Sconst e (is_const e).
+Proof. by case: e => /= *; constructor. Qed.
+
+Lemma sub_zone_at_ofsP vme z cs ty sl ofs ofsi ty2 :
+  sem_zone vme z = ok cs ->
   wf_concrete_slice cs ty sl ->
-  sem_pexpr true [::] se ofs >>= to_int = ok ofsi ->
+  sem_sexpr vme ofs >>= to_int = ok ofsi ->
   0 <= ofsi /\ ofsi + size_of ty2 <= size_of ty ->
   exists cs', [/\
-    sem_zone se (sub_zone_at_ofs z ofs (size_of ty2)) = ok cs',
+    sem_zone vme (sub_zone_at_ofs z ofs (Sconst (size_of ty2))) = ok cs',
     wf_concrete_slice cs' ty2 sl &
     sub_concrete_slice cs {| cs_ofs := ofsi; cs_len := size_of ty2 |} = ok cs'].
 Proof.
@@ -895,11 +976,11 @@ Proof.
   + by move=> hnil; rewrite hnil in ok_cs.
   have {}hsplit := split_lastP hz hsplit.
   have hsem:
-    sem_zone se
-      (z ++ [:: {| ss_ofs := ofs; ss_len := size_of ty2 |}]) = ok cs'.
+    sem_zone vme
+      (z ++ [:: {| ss_ofs := ofs; ss_len := Sconst (size_of ty2) |}]) = ok cs'.
   + rewrite (sem_zone_app _ ok_cs).
     by rewrite /= /sem_slice /= ok_ofsi /= ok_cs'.
-  move: (erefl (sem_slice se s)); rewrite {2}/sem_slice.
+  move: (erefl (sem_slice vme s)); rewrite {2}/sem_slice.
   case: is_constP => [sofs|//].
   case: is_constP => [slen|//] /= hs.
   case: is_constP ok_ofsi hsem => [_|//] /= [->] _.
@@ -918,11 +999,11 @@ Proof.
   by rewrite {1}/sub_concrete_slice /=; case: ifP => // _ _ [<-] ->.
 Qed.
 
-Lemma sub_region_at_ofs_wf se sr ty ofs ofsi ty2 :
-  wf_sub_region se sr ty ->
-  sem_pexpr true [::] se ofs >>= to_int = ok ofsi ->
+Lemma sub_region_at_ofs_wf vme sr ty ofs ofsi ty2 :
+  wf_sub_region vme sr ty ->
+  sem_sexpr vme ofs >>= to_int = ok ofsi ->
   0 <= ofsi /\ ofsi + size_of ty2 <= size_of ty ->
-  wf_sub_region se (sub_region_at_ofs sr ofs (size_of ty2)) ty2.
+  wf_sub_region vme (sub_region_at_ofs sr ofs (Sconst (size_of ty2))) ty2.
 Proof.
   move=> [hwfr hwfz] ok_ofsi hofsi; split=> //=.
   have [cs ok_cs wf_cs] := hwfz.
@@ -930,12 +1011,12 @@ Proof.
   by exists cs'.
 Qed.
 
-Lemma sub_region_addr_offset se sr ty ofs ofsi ty2 addr :
-  wf_sub_region se sr ty ->
-  sem_pexpr true [::] se ofs >>= to_int = ok ofsi ->
+Lemma sub_region_addr_offset vme sr ty ofs ofsi ty2 addr :
+  wf_sub_region vme sr ty ->
+  sem_sexpr vme ofs >>= to_int = ok ofsi ->
   0 <= ofsi /\ ofsi + size_of ty2 <= size_of ty ->
-  sub_region_addr se sr = ok addr ->
-  sub_region_addr se (sub_region_at_ofs sr ofs (size_of ty2)) = ok (addr + wrepr _ ofsi)%R.
+  sub_region_addr vme sr = ok addr ->
+  sub_region_addr vme (sub_region_at_ofs sr ofs (Sconst (size_of ty2))) = ok (addr + wrepr _ ofsi)%R.
 Proof.
   move=> hwf ok_ofsi hofsi.
   have [cs ok_cs wf_cs] := hwf.(wfsr_zone).
@@ -1092,7 +1173,7 @@ Lemma mk_ofsP wdb aa sz gd s2 ofs e i :
   sem_pexpr wdb gd s2 e >>= to_int = ok i ->
   sem_pexpr wdb gd s2 (mk_ofs aa sz e ofs) = ok (Vword (wrepr Uptr (i * mk_scale aa sz + ofs)%Z)).
 Proof.
-  rewrite /mk_ofs; case is_constP => /= [? [->] //| {e} e he] /=.
+  rewrite /mk_ofs; case expr_facts.is_constP => /= [? [->] //| {e} e he] /=.
   rewrite /sem_sop2 /=.
   have [_ -> /value_uinclE [ws [w [-> huincl]]]] /= := cast_ptrP he.
   rewrite !truncate_word_u /=.
@@ -1100,9 +1181,9 @@ Proof.
   by rewrite truncate_word_u /= wrepr_add wrepr_mul GRing.mulrC.
 Qed.
 
-Lemma mk_ofs_intP wdb gd s e i aa sz :
-  Let x := sem_pexpr wdb gd s e in to_int x = ok i ->
-  sem_pexpr wdb gd s (mk_ofs_int aa sz e) = ok (Vint (i * mk_scale aa sz)).
+Lemma mk_ofs_intP vme e i aa sz :
+  sem_sexpr vme e >>= to_int = ok i ->
+  sem_sexpr vme (mk_ofs_int aa sz e) = ok (Vint (i * mk_scale aa sz)).
 Proof.
   rewrite /mk_ofs_int; case is_constP => /= [? [->] //| {e} e he] /=.
   move: he; t_xrbindP => v ok_v ok_i.
@@ -1111,8 +1192,8 @@ Qed.
 
 Section EXPR.
   Variables (table : table) (rmap:region_map).
-  Variables (se : estate) (m0:mem) (s:estate) (s':estate).
-  Hypothesis (hvalid: valid_state table rmap se m0 s s').
+  Variables (vme : Vm.t) (m0:mem) (s:estate) (s':estate).
+  Hypothesis (hvalid: valid_state table rmap vme m0 s s').
 
   (* If [x] is a register, it is not impacted by the presence of global
      variables per hypothesis [vs_eq_vm].
@@ -1137,27 +1218,27 @@ Section EXPR.
     by rewrite Z.ones_equiv.
   Qed.
 
-  Lemma divideP ws e wdb gd i :
+  Lemma divideP ws e i :
     divide e ws ->
-    sem_pexpr wdb gd se e >>= to_int = ok i ->
+    sem_sexpr vme e >>= to_int = ok i ->
     i mod wsize_size ws = 0.
   Proof.
     case: e => //=.
     + move=> z.
       by rewrite /divide_z Zland_mod => /eqP hdiv -[<-].
-    case=> // o e1 e2.
+    move=> opk e1 e2.
     move=> /orP [].
     + case: is_constP => //= z1.
       rewrite /divide_z Zland_mod => /eqP hdiv.
       t_xrbindP=> v v2 ok_v2.
-      case: o => //=.
+      case: opk => //=.
       rewrite /sem_sop2 /=.
       t_xrbindP=> z2 ok_z2 <- /= [<-].
       by rewrite Zmult_mod hdiv /= Zmod_0_l.
     case: is_constP => //= z2.
     rewrite /divide_z Zland_mod => /eqP hdiv.
     t_xrbindP=> v v1 ok_v1.
-    case: o; last by rewrite /sem_sop2 /=; t_xrbindP.
+    case: opk; last by rewrite /sem_sop2 /=; t_xrbindP.
     rewrite /sem_sop2 /=.
     t_xrbindP=> z1 ok_z1 <- /= [<-].
     by rewrite Zmult_mod hdiv Z.mul_0_r Zmod_0_l.
@@ -1165,7 +1246,7 @@ Section EXPR.
 
   Lemma divideP_slice sli ws cs :
     divide (ss_ofs sli) ws ->
-    sem_slice se sli = ok cs ->
+    sem_slice vme sli = ok cs ->
     cs.(cs_ofs) mod wsize_size ws = 0.
   Proof.
     move=> hdiv.
@@ -1178,7 +1259,7 @@ Section EXPR.
   (* FIXME: clean *)
   Lemma divide_zoneP z ws cs :
     divide_zone z ws ->
-    sem_zone se z = ok cs ->
+    sem_zone vme z = ok cs ->
     cs.(cs_ofs) mod wsize_size ws = 0.
   Proof.
     case: z => [//|sli1 z] /= /andP [hdiv1 hdiv2].
@@ -1198,8 +1279,8 @@ Section EXPR.
   Qed.
 
   Lemma check_alignP x sr ty w al ws tt :
-    wf_sub_region se sr ty ->
-    sub_region_addr se sr = ok w ->
+    wf_sub_region vme sr ty ->
+    sub_region_addr vme sr = ok w ->
     check_align al x sr ws = ok tt ->
     is_aligned_if al w ws.
   Proof.
@@ -1245,14 +1326,14 @@ Section EXPR.
 
   Lemma sub_region_addr_glob x ofs ws :
     wf_global x ofs ws ->
-    sub_region_addr se (sub_region_glob x ws) = ok (rip + wrepr _ ofs)%R.
+    sub_region_addr vme (sub_region_glob x ws) = ok (rip + wrepr _ ofs)%R.
   Proof.
     by move=> hwf; rewrite /sub_region_addr /= hwf.(wfg_offset) wrepr0 GRing.addr0.
   Qed.
 
   Lemma sub_region_addr_direct x sl ofs ws cs sc :
     wf_direct x sl ofs ws cs sc ->
-    sub_region_addr se (sub_region_direct sl ws cs sc) =
+    sub_region_addr vme (sub_region_direct sl ws cs sc) =
       ok (wbase_ptr sc + wrepr _ (ofs + cs.(cs_ofs)))%R.
   Proof.
     by move=> hwf; rewrite /sub_region_addr hwf.(wfd_offset) wrepr_add GRing.addrA.
@@ -1260,7 +1341,7 @@ Section EXPR.
 
   Lemma sub_region_addr_stkptr x sl ofs ws cs f :
     wf_stkptr x sl ofs ws cs f ->
-    sub_region_addr se (sub_region_stkptr sl ws cs) =
+    sub_region_addr vme (sub_region_stkptr sl ws cs) =
       ok (rsp + wrepr _ (ofs + cs.(cs_ofs)))%R.
   Proof.
     by move=> hwf; rewrite /sub_region_addr /= hwf.(wfs_offset) wrepr_add GRing.addrA.
@@ -1268,7 +1349,7 @@ Section EXPR.
 
   Lemma sub_region_stkptr_wf y sl ofs ws cs f :
     wf_stkptr y sl ofs ws cs f ->
-    wf_sub_region se (sub_region_stkptr sl ws cs) spointer.
+    wf_sub_region vme (sub_region_stkptr sl ws cs) spointer.
   Proof.
     case=> *; split=> //.
     by eexists; first by reflexivity.
@@ -1286,10 +1367,11 @@ Section EXPR.
     by move=> /get_sub_region_statusP [-> ->].
   Qed.
 
+(*
   Lemma symbolic_slice_beqP s1 s2 :
     symbolic_slice_beq s1 s2 ->
-    sem_slice se s1 = sem_slice se s2.
-  Proof.
+    sem_slice vme s1 = sem_slice vme s2.
+  Proof. move=> /eqP. congruence.
     move=> /andP [eq1 eq2].
     by rewrite /sem_slice (eq_exprP _ _ _ eq1) (eq_exprP _ _ _ eq2).
   Qed.
@@ -1322,21 +1404,21 @@ Section EXPR.
     rewrite /sub_region_addr.
     by rewrite (symbolic_zone_beq_sem_zone heqz) heqr.
   Qed.
+*)
 
   Lemma addr_from_pkP wdb (x:var_i) pk sr ty xi ofs :
     wf_local x pk ->
-    valid_pk rmap se s' sr pk ->
-    wf_sub_region se sr ty ->
+    valid_pk rmap vme s' sr pk ->
+    wf_sub_region vme sr ty ->
     addr_from_pk pmap x pk = ok (xi, ofs) ->
     exists2 w,
       get_var wdb (evm s') xi >>= to_pointer = ok w &
-      sub_region_addr se sr = ok (w + wrepr _ ofs)%R.
+      sub_region_addr vme sr = ok (w + wrepr _ ofs)%R.
   Proof.
     case: pk => //.
-    + move=> sl ofs' ws cs sc hwfpk /= heqsub _ [<- <-].
+    + move=> sl ofs' ws cs sc hwfpk /= -> _ [<- <-].
       rewrite /= /get_var base_ptrP /= orbT /= truncate_word_u.
       eexists; first by reflexivity.
-      rewrite (sub_region_beq_addr heqsub).
       by apply (sub_region_addr_direct hwfpk).
     move=> p hwfpk /= hpk hwf [<- <-].
     have [cs ok_cs _] := hwf.(wfsr_zone).
@@ -1348,12 +1430,12 @@ Section EXPR.
 
   Lemma addr_from_vpkP wdb (x:var_i) vpk sr ty xi ofs :
     wf_vpk x vpk ->
-    valid_vpk rmap se s' x sr vpk ->
-    wf_sub_region se sr ty ->
+    valid_vpk rmap vme s' x sr vpk ->
+    wf_sub_region vme sr ty ->
     addr_from_vpk pmap x vpk = ok (xi, ofs) ->
     exists2 w,
       get_var wdb (evm s') xi >>= to_pointer = ok w &
-      sub_region_addr se sr = ok (w + wrepr _ ofs)%R.
+      sub_region_addr vme sr = ok (w + wrepr _ ofs)%R.
   Proof.
     case: vpk => [[ofs' ws]|pk].
     + move=> hwfpk /= -> hwf [<- <-].
@@ -1485,7 +1567,7 @@ Section EXPR.
       t_xrbindP=> hcvalid halign [xi ofsi] haddr [<-] hget /= htr.
       have hgvalid := get_gsub_region_statusP hgvk hgsub.
       have hwf := [elaborate check_gvalid_wf wfr_wf hgvalid].
-      have hvpk: valid_vpk rmap se s' x.(gv) sr vpk.
+      have hvpk: valid_vpk rmap vme s' x.(gv) sr vpk.
       + have /wfr_gptr := hgvalid.
         by rewrite hgvk => -[_ [[]] <-].
       have [wi ok_wi eq_addr] :=
@@ -1524,7 +1606,7 @@ Section EXPR.
       t_xrbindP=> hcvalid halign [xi ofsi] haddr [<-] /=.
       have hgvalid := get_gsub_region_statusP hgvk hgsub.
       have hwf := [elaborate check_gvalid_wf wfr_wf hgvalid].
-      have hvpk: valid_vpk rmap se s' x.(gv) sr vpk.
+      have hvpk: valid_vpk rmap vme s' x.(gv) sr vpk.
       + have /wfr_gptr := hgvalid.
         by rewrite hgvk => -[_ [[]] <-].
       have [wi ok_wi eq_addr] :=
@@ -1613,7 +1695,7 @@ Qed.
 
 Section CLONE.
 
-Variable (clone : (var_i → PrimInt63.int → var_i)).
+Variable (clone : (var → PrimInt63.int → var)).
 Context (clone_ty : forall x n, (clone x n).(vtype) = x.(vtype)).
 
 Notation symbolic_of_pexpr := (symbolic_of_pexpr clone).
@@ -1634,6 +1716,34 @@ Let Y es := forall table table' es',
     wft_VARS table',
     Sv.Subset table.(vars) table'.(vars) &
     Sv.Subset (read_es es') table'.(vars)].
+(*
+Lemma read_e_esE :
+  (∀ e s, Sv.Equal (read_e_rec s e) (Sv.union (read_e e) s)) ∧
+  (∀ es s, Sv.Equal (read_es_rec s es) (Sv.union (read_es es) s)).
+Proof.
+  apply: pexprs_ind_pair;
+  split => //= [ e He es Hes | v | al aa w v e He | aa w len v e He | al w v e He | o e1 He1 e2 He2 | t e He e1 He1 e2 He2 ] s;
+    rewrite /read_e /= ?He ?He1 ?He2; try (clear; SvD.fsetdec).
+  rewrite /read_es /= -/read_e Hes He Hes; clear; SvD.fsetdec.
+Qed.
+*)
+Lemma read_eE e s : Sv.Equal (read_e_rec s e) (Sv.union (read_e e) s).
+Proof.
+  by elim: e s => [z|x|ws e ih|ws e ih|opk e ih|opk e1 ih1 e2 ih2|opk e1 ih1 e2 ih2|opk e1 ih1 e2 ih2] s;
+    rewrite /read_e /= ?ih ?ih2 ?ih1; clear; SvD.fsetdec.
+Qed.
+
+Lemma read_e_var (x:var) : Sv.Equal (read_e (Svar x)) (Sv.singleton x).
+Proof. by rewrite /read_e /=; clear; SvD.fsetdec. Qed.
+
+Lemma read_esE es s : Sv.Equal (read_es_rec s es) (Sv.union (read_es es) s).
+Proof.
+  by elim: es s => [|e es ih] s; rewrite /read_es /= ?ih ?read_eE; clear; SvD.fsetdec.
+Qed.
+
+Lemma read_es_cons e es :
+  Sv.Equal (read_es (e :: es)) (Sv.union (read_e e) (read_es es)).
+Proof. by rewrite /read_es /= !read_esE read_eE; clear; SvD.fsetdec. Qed.
 
 Lemma symbolic_of_pexpr_vars_e_es :
   (forall e, X e) /\ (forall es, Y es).
@@ -1653,10 +1763,6 @@ Proof.
     rewrite read_es_cons.
     by clear -hsubr1 hsub2 hsubr2; SvD.fsetdec.
   + move=> z table _ _ [<- <-] hvars.
-    split=> //.
-    rewrite /read_e /=.
-    by clear; SvD.fsetdec.
-  + move=> b table _ _ [<- <-] hvars.
     split=> //.
     rewrite /read_e /=.
     by clear; SvD.fsetdec.
@@ -1686,10 +1792,14 @@ Proof.
     rewrite read_e_var /read_gvar /=.
     by clear; SvD.fsetdec.
   + move=> op e he table table' e'.
+    apply: obindP => op' ok_op'.
     apply: obindP => -[{}table' {}e'] /he{}he [<- <-] hvars.
     have [hvars' hsub hsubr] := he hvars.
+    have ->: read_e (op' e') = read_e e'.
+    + by case: op ok_op' => // ? [<-].
     by split.
   + move=> op e1 he1 e2 he2 table table' e'.
+    apply: obindP => op' ok_op'.
     apply: obindP => -[table1 e1'] /he1{}he1.
     apply: obindP => -[table2 e2'] /he2{}he2.
     move=> [<- <-] hvars.
@@ -1697,25 +1807,10 @@ Proof.
     have [hvars2 hsub2 hsubr2] := he2 hvars1.
     split=> //.
     + by clear -hsub1 hsub2; SvD.fsetdec.
-    rewrite read_e_Papp2.
+    have ->: Sv.Equal (read_e (op' e1' e2')) (Sv.union (read_e e1') (read_e e2')).
+    + by case: op ok_op' => // ? [<-];
+        rewrite /read_e /= -/read_e read_eE; clear; SvD.fsetdec.
     by clear -hsubr1 hsub2 hsubr2; SvD.fsetdec.
-  + move=> op es hes table table' e'.
-    apply: obindP => -[table1 es'] /hes{}hes.
-    move=> [<- <-] hvars.
-    have [hvars1 hsub1 hsubr1] := hes hvars.
-    by split.
-  move=> ty b hb e1 he1 e2 he2 table table' e'.
-  apply: obindP => -[table1 b'] /hb{}hb.
-  apply: obindP => -[table2 e1'] /he1{}he1.
-  apply: obindP => -[table3 e2'] /he2{}he2.
-  move=> [<- <-] hvars.
-  have [hvars1 hsub1 hsubr1] := hb hvars.
-  have [hvars2 hsub2 hsubr2] := he1 hvars1.
-  have [hvars3 hsub3 hsubr3] := he2 hvars2.
-  split=> //.
-  + by clear -hsub1 hsub2 hsub3; SvD.fsetdec.
-  rewrite read_e_Pif.
-  by clear -hsubr1 hsub2 hsubr2 hsub3 hsubr3; SvD.fsetdec.
 Qed.
 
 (* in practice, subsumed by wf_table_symbolic_of_pexpr *)
@@ -1759,181 +1854,479 @@ Context (s : estate).
    variables only in one branch. This would also allow to avoid alloc_array_move
    from updating table *)
 Let X e :=
-  forall table table' e' se,
+  forall table table' e' v1 vme,
     symbolic_of_pexpr table e = Some (table', e') ->
-    wf_table table se s.(evm) ->
-    exists vme, [/\
-      wf_table table' (with_vm se vme) s.(evm),
-      se.(evm) <=1 vme &
-      forall gd v1,
-        sem_pexpr true gd s e = ok v1 ->
-        exists2 v2,
-          sem_pexpr true [::] (with_vm se vme) e' = ok v2 &
-          value_uincl v1 v2].
+    sem_pexpr true gd s e = ok v1 ->
+    wf_table table vme s.(evm) ->
+    exists vme', [/\
+      wf_table table' vme' s.(evm),
+      vme =[table.(vars)] vme' &
+      exists2 v2,
+        sem_sexpr vme' e' = ok v2 &
+        value_uincl v1 v2].
+
+Definition sem_sexprs vme := mapM (sem_sexpr vme).
 
 Let Y es :=
-  forall table table' es' se,
+  forall table table' es' vs1 vme,
     fmapo symbolic_of_pexpr table es = Some (table', es') ->
-    wf_table table se s.(evm) ->
-    exists vme, [/\
-      wf_table table' (with_vm se vme) s.(evm),
-      se.(evm) <=1 vme &
-      forall gd vs1,
-        sem_pexprs true gd s es = ok vs1 ->
+    sem_pexprs true gd s es = ok vs1 ->
+    wf_table table vme s.(evm) ->
+    exists vme', [/\
+      wf_table table' vme' s.(evm),
+      vme =[table.(vars)] vme' &
         exists2 vs2,
-          sem_pexprs true [::] (with_vm se vme) es' = ok vs2 &
+          sem_sexprs vme' es' = ok vs2 &
           List.Forall2 value_uincl vs1 vs2].
+
+Lemma sem_sexpr_uincl vme1 vme2 e v1 :
+  vme1 <=1 vme2 ->
+  sem_sexpr vme1 e = ok v1 ->
+  exists2 v2,
+    sem_sexpr vme2 e = ok v2 & value_uincl v1 v2.
+Proof.
+  move=> huincl.
+  elim: e v1 => [z|x|ws e ih|ws e ih|opk e ih|opk e1 ih1 e2 ih2|opk e1 ih1 e2 ih2|opk e1 ih1 e2 ih2] v1 /=.
+  + move=> [<-].
+    by eexists; first by reflexivity.
+  + by apply get_var_uincl.
+  + t_xrbindP=> ve1 /ih [v2 ok_v2 v_uincl] ok_v1.
+    exists v1 => //.
+    rewrite ok_v2 /=.
+    by apply (vuincl_sem_sop1 v_uincl ok_v1).
+  + t_xrbindP=> ve1 /ih [v2 ok_v2 v_uincl] ok_v1.
+    exists v1 => //.
+    rewrite ok_v2 /=.
+    by apply (vuincl_sem_sop1 v_uincl ok_v1).
+  + t_xrbindP=> ve1 /ih [v2 ok_v2 v_uincl] ok_v1.
+    exists v1 => //.
+    rewrite ok_v2 /=.
+    by apply (vuincl_sem_sop1 v_uincl ok_v1).
+  + t_xrbindP=> ve1 /ih1 [v21 ok_v21 v1_uincl] ve2 /ih2 [v22 ok_v22 v2_uincl] ok_v1.
+    exists v1 => //.
+    rewrite ok_v21 ok_v22 /=.
+    by apply (vuincl_sem_sop2 v1_uincl v2_uincl ok_v1).
+  + t_xrbindP=> ve1 /ih1 [v21 ok_v21 v1_uincl] ve2 /ih2 [v22 ok_v22 v2_uincl] ok_v1.
+    exists v1 => //.
+    rewrite ok_v21 ok_v22 /=.
+    by apply (vuincl_sem_sop2 v1_uincl v2_uincl ok_v1).
+  t_xrbindP=> ve1 /ih1 [v21 ok_v21 v1_uincl] ve2 /ih2 [v22 ok_v22 v2_uincl] ok_v1.
+  exists v1 => //.
+  rewrite ok_v21 ok_v22 /=.
+  by apply (vuincl_sem_sop2 v1_uincl v2_uincl ok_v1).
+Qed.
+
+Lemma eq_on_sem_sexpr vme vme' e :
+  vme =[read_e e] vme' ->
+  sem_sexpr vme e = sem_sexpr vme' e.
+Proof.
+  elim: e => [z|x|ws e ih|ws e ih|opk e ih|opk e1 ih1 e2 ih2|opk e1 ih1 e2 ih2|opk e1 ih1 e2 ih2] /=.
+  + done.
+  + apply get_var_eq_on.
+    by rewrite read_e_var; clear; SvD.fsetdec.
+  + by move=> /ih <-.
+  + by move=> /ih <-.
+  + by move=> /ih <-.
+  + move=> vme_eq.
+    have /ih1 <-: vme =[read_e e1] vme'.
+    + apply: eq_onI vme_eq.
+      rewrite {2}/read_e /= -/read_e read_eE.
+      by clear; SvD.fsetdec.
+    have /ih2 <-: vme =[read_e e2] vme'.
+    + apply: eq_onI vme_eq.
+      rewrite {2}/read_e /= -/read_e read_eE.
+      by clear; SvD.fsetdec.
+    done.
+  + move=> vme_eq.
+    have /ih1 <-: vme =[read_e e1] vme'.
+    + apply: eq_onI vme_eq.
+      rewrite {2}/read_e /= -/read_e read_eE.
+      by clear; SvD.fsetdec.
+    have /ih2 <-: vme =[read_e e2] vme'.
+    + apply: eq_onI vme_eq.
+      rewrite {2}/read_e /= -/read_e read_eE.
+      by clear; SvD.fsetdec.
+    done.
+  move=> vme_eq.
+  have /ih1 <-: vme =[read_e e1] vme'.
+  + apply: eq_onI vme_eq.
+    rewrite {2}/read_e /= -/read_e read_eE.
+    by clear; SvD.fsetdec.
+  have /ih2 <-: vme =[read_e e2] vme'.
+  + apply: eq_onI vme_eq.
+    rewrite {2}/read_e /= -/read_e read_eE.
+    by clear; SvD.fsetdec.
+  done.
+Qed.
+
+Lemma sem_sexpr_defined vme e v : sem_sexpr vme e = ok v -> is_defined v.
+Proof.
+  case: e => [z|x|ws e|ws e|opk e|opk e1 e2|opk e1 e2|opk e1 e2] /=.
+  + by move=> [<-].
+  + by move=> /get_varP [].
+  + by rewrite /sem_sop1 /=; t_xrbindP=> _ _ ? _ <-.
+  + by rewrite /sem_sop1 /=; t_xrbindP=> _ _ ? _ <-.
+  + case: opk => [|ws].
+    + by rewrite /sem_sop1 /=; t_xrbindP=> _ _ ? _ <-.
+    by rewrite /sem_sop1 /=; t_xrbindP=> _ _ ? _ <-.
+  + case: opk => [|ws].
+    + by rewrite /sem_sop2 /=; t_xrbindP=> _ _ _ _ ? _ ? _ <-.
+    by rewrite /sem_sop2 /=; t_xrbindP=> _ _ _ _ ? _ ? _ <-.
+  + case: opk => [|ws].
+    + by rewrite /sem_sop2 /=; t_xrbindP=> _ _ _ _ ? _ ? _ <-.
+    by rewrite /sem_sop2 /=; t_xrbindP=> _ _ _ _ ? _ ? _ <-.
+  case: opk => [|ws].
+  + by rewrite /sem_sop2 /=; t_xrbindP=> _ _ _ _ ? _ ? _ <-.
+  by rewrite /sem_sop2 /=; t_xrbindP=> _ _ _ _ ? _ ? _ <-.
+Qed.
+
+Lemma is_definedI v ty :
+  is_defined v ->
+  type_of_val v = ty ->
+  match ty with
+  | sbool => exists b, v = Vbool b
+  | sint => exists i, v = Vint i
+  | sarr len => exists a : WArray.array len, v = Varr a
+  | sword ws => exists w : word ws, v = Vword w
+  end.
+Proof. by case: v => [b|i|len a|ws w|//] _ <- /=; eexists; reflexivity. Qed.
+
+(*
+Definition same_type_head ty1 ty2 :=
+  match ty1, ty2 with
+  | sbool, sbool => true
+  | sint, sint => true
+  | sarr _, sarr _ => true
+  | sword _, sword _ => true
+  | _, _ => false
+  end.
+
+Lemma subtype_same_type_head ty1 ty2 : subtype ty1 ty2 -> same_type_head ty1 ty2.
+Proof.
+  case: ty1 => /=.
+  + by move=> /eqP <-.
+  + by move=> /eqP <-.
+  + by move=> len /eqP <-.
+  move=> ws1.
+  by case: ty2.
+Qed.
+
+Lemma same_type_head_refl : Reflexive same_type_head.
+Proof. by case. Qed.
+
+Lemma same_type_head_sym : Symmetric same_type_head.
+Proof. by case=> [||?|?] [||?|?]. Qed.
+
+Lemma same_type_head_trans : Transitive same_type_head.
+Proof. by case=> [||?|?] [||?|?]. Qed.
+
+Instance same_type_head_equiv : Equivalence same_type_head.
+Proof.
+  split.
+  - exact: same_type_head_refl.
+  - exact: same_type_head_sym.
+  exact: same_type_head_trans.
+Qed.
+
+Lemma same_type_head_always_sem ty1 ty2 e :
+  same_type_head ty1 ty2 ->
+  always_sem e ty1 ->
+  always_sem e ty2.
+Proof.
+  move=> hsub halways vme /halways [v [ok_v hdef hhead]].
+  exists v; split=> //.
+  by transitivity ty1.
+Qed.
+*)
+
+Lemma typecheckP e ty :
+  typecheck e = ok ty ->
+  forall vme,
+    Sv.For_all (fun x => exists2 v, get_var true vme x = ok v & type_of_val v = x.(vtype)) (read_e e) ->
+    exists2 v, sem_sexpr vme e = ok v & type_of_val v = ty.
+Proof.
+  elim: e ty => [z|x|ws e ih|ws e ih|opk e ih|opk e1 ih1 e2 ih2|opk e1 ih1 e2 ih2|opk e1 ih1 e2 ih2] ty /=.
+  + move=> [<-] vme _. eexists; first by reflexivity. done.
+  + move=> [<-] vme hdef.
+    apply hdef.
+    rewrite read_e_var.
+    by clear; SvD.fsetdec.
+  + t_xrbindP=> -[] // hty [<-] vme /(ih _ hty) [v ok_v ty_v].
+    rewrite ok_v /=.
+    have [z ->] := is_definedI (sem_sexpr_defined ok_v) ty_v.
+    rewrite /sem_sop1 /=. eexists; first by reflexivity.
+    done.
+  + t_xrbindP=> -[] // ws' hty.
+    case: ifP => // hcmp.
+    move=> [<-] vme /(ih _ hty) [v ok_v ty_v].
+    rewrite ok_v /=.
+    have [w ->] := is_definedI (sem_sexpr_defined ok_v) ty_v.
+    rewrite /sem_sop1 /= truncate_word_le //=.
+    eexists; first by reflexivity.
+    simpl. done.
+  + t_xrbindP=> ty' hty.
+    case: ifP => // hsub [<-].
+    move=> vme /(ih _ hty) [v ok_v ty_v].
+    rewrite ok_v /=.
+    case: opk hsub ty_v => [|ws].
+    + move=> /subtypeEl /= -> ty_v.
+      have [z ->] := is_definedI (sem_sexpr_defined ok_v) ty_v.
+      rewrite /sem_sop1 /=. eexists; first by reflexivity.
+      done.
+    move=> /subtypeEl /= [ws' [-> hcmp]] ty_v.
+    have [w ->] := is_definedI (sem_sexpr_defined ok_v) ty_v.
+    rewrite /sem_sop1 /= truncate_word_le //=. eexists; first by reflexivity.
+    done.
+  + t_xrbindP=> ty1 hty1 ty2 hty2.
+    case: ifP => // /andP [hsub1 hsub2].
+    move=> [<-] vme hfor.
+    have hfor1: Sv.For_all (fun x => exists2 v, get_var true vme x = ok v & type_of_val v = x.(vtype)) (read_e e1).
+    + move=> y y_in. apply hfor.
+      rewrite /read_e /= -/read_e read_eE.
+      by clear -y_in; SvD.fsetdec.
+    have hfor2: Sv.For_all (fun x => exists2 v, get_var true vme x = ok v & type_of_val v = x.(vtype)) (read_e e2).
+    + move=> y y_in. apply hfor.
+      rewrite /read_e /= -/read_e read_eE.
+      by clear -y_in; SvD.fsetdec.
+    have [v1 ok_v1 ty_v1] := ih1 _ hty1 _ hfor1.
+    have [v2 ok_v2 ty_v2] := ih2 _ hty2 _ hfor2.
+    rewrite ok_v1 ok_v2 /=.
+    case: opk hsub1 hsub2 ty_v1 ty_v2 {hfor} => [|ws].
+    + move=> /subtypeEl -> /subtypeEl -> /= ty_v1 ty_v2.
+      have [z1 ->] := is_definedI (sem_sexpr_defined ok_v1) ty_v1.
+      have [z2 ->] := is_definedI (sem_sexpr_defined ok_v2) ty_v2.
+      rewrite /sem_sop2 /=.
+      eexists; first by reflexivity. done.
+    move=> /subtypeEl [ws1 [-> hcmp1]] /subtypeEl [ws2 [-> hcmp2]] ty_v1 ty_v2.
+    have [z1 ->] := is_definedI (sem_sexpr_defined ok_v1) ty_v1.
+    have [z2 ->] := is_definedI (sem_sexpr_defined ok_v2) ty_v2.
+    rewrite /sem_sop2 /= !truncate_word_le //=.
+    eexists; first by reflexivity.
+    done.
+  + t_xrbindP=> ty1 hty1 ty2 hty2.
+    case: ifP => // /andP [hsub1 hsub2].
+    move=> [<-] vme hfor.
+    have hfor1: Sv.For_all (fun x => exists2 v, get_var true vme x = ok v & type_of_val v = x.(vtype)) (read_e e1).
+    + move=> y y_in. apply hfor.
+      rewrite /read_e /= -/read_e read_eE.
+      by clear -y_in; SvD.fsetdec.
+    have hfor2: Sv.For_all (fun x => exists2 v, get_var true vme x = ok v & type_of_val v = x.(vtype)) (read_e e2).
+    + move=> y y_in. apply hfor.
+      rewrite /read_e /= -/read_e read_eE.
+      by clear -y_in; SvD.fsetdec.
+    have [v1 ok_v1 ty_v1] := ih1 _ hty1 _ hfor1.
+    have [v2 ok_v2 ty_v2] := ih2 _ hty2 _ hfor2.
+    rewrite ok_v1 ok_v2 /=.
+    case: opk hsub1 hsub2 ty_v1 ty_v2 {hfor} => [|ws].
+    + move=> /subtypeEl -> /subtypeEl -> /= ty_v1 ty_v2.
+      have [z1 ->] := is_definedI (sem_sexpr_defined ok_v1) ty_v1.
+      have [z2 ->] := is_definedI (sem_sexpr_defined ok_v2) ty_v2.
+      rewrite /sem_sop2 /=.
+      eexists; first by reflexivity. done.
+    move=> /subtypeEl [ws1 [-> hcmp1]] /subtypeEl [ws2 [-> hcmp2]] ty_v1 ty_v2.
+    have [z1 ->] := is_definedI (sem_sexpr_defined ok_v1) ty_v1.
+    have [z2 ->] := is_definedI (sem_sexpr_defined ok_v2) ty_v2.
+    rewrite /sem_sop2 /= !truncate_word_le //=.
+    eexists; first by reflexivity.
+    done.
+  t_xrbindP=> ty1 hty1 ty2 hty2.
+  case: ifP => // /andP [hsub1 hsub2].
+  move=> [<-] vme hfor.
+  have hfor1: Sv.For_all (fun x => exists2 v, get_var true vme x = ok v & type_of_val v = x.(vtype)) (read_e e1).
+  + move=> y y_in. apply hfor.
+    rewrite /read_e /= -/read_e read_eE.
+    by clear -y_in; SvD.fsetdec.
+  have hfor2: Sv.For_all (fun x => exists2 v, get_var true vme x = ok v & type_of_val v = x.(vtype)) (read_e e2).
+  + move=> y y_in. apply hfor.
+    rewrite /read_e /= -/read_e read_eE.
+    by clear -y_in; SvD.fsetdec.
+  have [v1 ok_v1 ty_v1] := ih1 _ hty1 _ hfor1.
+  have [v2 ok_v2 ty_v2] := ih2 _ hty2 _ hfor2.
+  rewrite ok_v1 ok_v2 /=.
+  case: opk hsub1 hsub2 ty_v1 ty_v2 {hfor} => [|ws].
+  + move=> /subtypeEl -> /subtypeEl -> /= ty_v1 ty_v2.
+    have [z1 ->] := is_definedI (sem_sexpr_defined ok_v1) ty_v1.
+    have [z2 ->] := is_definedI (sem_sexpr_defined ok_v2) ty_v2.
+    rewrite /sem_sop2 /=.
+    eexists; first by reflexivity. done.
+  move=> /subtypeEl [ws1 [-> hcmp1]] /subtypeEl [ws2 [-> hcmp2]] ty_v1 ty_v2.
+  have [z1 ->] := is_definedI (sem_sexpr_defined ok_v1) ty_v1.
+  have [z2 ->] := is_definedI (sem_sexpr_defined ok_v2) ty_v2.
+  rewrite /sem_sop2 /= !truncate_word_le //=.
+  eexists; first by reflexivity.
+  done.
+Qed.
+
+(* strange lemma... *)
+Lemma value_extend v ty :
+  subtype (type_of_val v) ty ->
+  exists2 v', value_uincl v v' & type_of_val v' = ty.
+Proof.
+  case: ty => [||len|ws]; [by move=> /subtypeE hty; exists v..|].
+  move=> /subtypeE [ws' [hty hcmp]].
+  have [->|[w ->]] := type_of_valI hty.
+  + by exists (@Vword ws 0) => /=.
+  exists (Vword (zero_extend ws w)) => //=.
+  by apply word_uincl_zero_extR.
+Qed.
 
 Lemma wf_table_symbolic_of_pexpr_e_es : (forall e, X e) /\ (forall es, Y es).
 Proof.
   apply: pexprs_ind_pair; split; subst X Y => //=.
-  - move=> table _ _ se [<- <-] hwft.
-    exists se.(evm); split=> //=.
-    + by rewrite with_vm_same.
-    move=> _ _ [<-].
+  - move=> table _ _ _ vme [<- <-] [<-] hwft.
+    exists vme; split=> //=.
     by eexists; first by reflexivity.
-  - move=> e he es hes table table' es' se.
+  - move=> e he es hes table table' es' vs vme.
     apply: obindP => -[table1 e'] hsyme.
-    apply: obindP => -[table2 {}es'] /= hsymes [<- <-] hwft.
-    have [vme1 [hwft1 hincl1 hseme1]] := he _ _ _ _ hsyme hwft.
-    have [vme2 [hwft2 hincl2 hseme2]] := hes _ _ _ _ hsymes hwft1.
-    exists vme2; split=> //=.
-    + exact: vm_uinclT hincl1 hincl2.
-    t_xrbindP=> gd vs1 v1 /hseme1 [v2 ok_v2 hincl]
-      {}vs /hseme2 [vs2 ok_vs2 hincls] <-.
-    have [v2' ok_v2' hincl'] := sem_pexpr_uincl hincl2 ok_v2.
-    rewrite ok_v2' ok_vs2 /=.
+    apply: obindP => -[table2 {}es'] /= hsymes [<- <-].
+    t_xrbindP=> v ok_v {}vs ok_vs <- hwft.
+    have [vme1 [hwft1 hincl1 hseme1]] := he _ _ _ _ _ hsyme ok_v hwft.
+    have [vme2 [hwft2 hincl2 hseme2]] := hes _ _ _ _ _ hsymes ok_vs hwft1.
+    exists vme2; split=> //.
+    + apply: (eq_onT hincl1).
+      apply: eq_onI hincl2.
+      by apply (symbolic_of_pexpr_subset_vars hsyme hwft.(wft_vars)).
+    have [v' ok_v' v_uincl] := hseme1.
+    have ok_v'': sem_sexpr vme2 e' = ok v'.
+    + have heq: vme1 =[read_e e'] vme2.
+      + apply: eq_onI hincl2.
+        by apply (symbolic_of_pexpr_subset_read hsyme hwft.(wft_vars)).
+      by rewrite -(eq_on_sem_sexpr heq).
+    have [vs' ok_vs' vs_uincl] := hseme2.
+    rewrite /= ok_v'' ok_vs' /=.
     eexists; first by reflexivity.
-    constructor=> //.
-    exact: value_uincl_trans hincl hincl'.
-  - move=> z table _ _ se [<- <-] hwft.
-    exists se.(evm); split=> //=.
-    + by rewrite with_vm_same.
-    move=> _ _ [<-].
+    by constructor.
+  - move=> z table _ _ _ vme [<- <-] [<-] hwft.
+    exists vme; split=> //=.
     by eexists; first by reflexivity.
-  - move=> b table _ _ se [<- <-] hwft.
-    exists se.(evm); split=> //=.
-    + by rewrite with_vm_same.
-    move=> _ _ [<-].
-    by eexists; first by reflexivity.
-  - move=> x table table' e' se.
+  - move=> x table table' e' v vme.
     case: ifP => // hlvar.
     rewrite /table_get_var.
     case hget: Mvar.get => [e|].
-    + move=> [<- <-] hwft.
-      exists se.(evm); split=> //.
-      + by rewrite with_vm_same.
-      move=> gd v1.
-      rewrite /get_gvar hlvar with_vm_same.
-      by apply: hwft.(wft_sem) hget.
+    + move=> [<- <-] ok_v hwft.
+      exists vme; split=> //.
+      move: ok_v; rewrite /get_gvar hlvar.
+      by apply: (hwft.(wft_sem) hget).
     rewrite /table_fresh_var.
     set x' := clone x.(gv) _.
     case: Sv_memP => // hnin.
     case: Mvar.get => //.
     rewrite /table_set_var /=.
     case: Sv.mem => //.
-    move=> [<- <-] hwft.
-    exists se.(evm).[x' <- s.(evm).[x.(gv)]].
+    move=> [<- <-] ok_v hwft.
+    have [def_v /compat_type_subtype sub_v] := get_gvar_compat ok_v.
+    have [v' uincl_v ty_v'] := value_extend sub_v.
+    have def_v' := value_uincl_defined uincl_v def_v.
+    exists vme.[x' <- v'].
     split=> /=.
-    + case: hwft => hvars hundef hsem.
+    + case: hwft => hvars hdef hsem.
       split.
       + move=> y ey /=.
         rewrite Mvar.setP.
         case: eq_op.
         + move=> [<-] /=.
-          rewrite read_e_var /read_gvar /=.
+          rewrite read_e_var.
           by clear; SvD.fsetdec.
         move=> /hvars.
         by clear; SvD.fsetdec.
-      + move=> y /= ynin.
-        rewrite Vm.setP_neq; last first.
-        + apply /eqP.
-          by clear -ynin; SvD.fsetdec.
-        apply hundef.
-        by clear -ynin; SvD.fsetdec.
-      move=> y ey vy /=.
-      rewrite Mvar.setP.
-      case: eqP.
-      + move=> <- [<-] /=.
-        rewrite /get_gvar /= /get_var Vm.setP_eq.
-        rewrite compat_val_vm_truncate_val; last first.
-        + by rewrite clone_ty; apply Vm.getP.
-        by move=> ?; exists vy.
-      move=> _ hey ok_vy.
-      have [v2 ok_v2 hincl] := hsem _ _ _ hey ok_vy.
-      exists v2 => //.
-      rewrite -ok_v2.
-      apply eq_on_sem_pexpr => //=.
-      move=> y' hin.
+      + move=> y /= yin.
+        rewrite get_var_set;
+          last by apply subtype_truncatable; rewrite clone_ty -ty_v'.
+        case: eqP => [<-|hneq].
+        + rewrite def_v' /= vm_truncate_val_eq clone_ty //.
+          by eexists; first by reflexivity.
+        apply hdef.
+        by clear -hneq hnin yin; SvD.fsetdec.
+      + move=> y ey vy /=.
+        rewrite Mvar.setP.
+        case: eqP => [<-|_].
+        + move=> [<-] /=.
+          move: ok_v; rewrite /get_gvar hlvar => ok_v.
+          rewrite ok_v => -[<-].
+          rewrite get_var_eq clone_ty;
+            last by apply subtype_truncatable; rewrite -ty_v'.
+          rewrite def_v' /= vm_truncate_val_eq //.
+          by eexists; first by reflexivity.
+        move=> hey ok_vy.
+        have [vy' ok_vy' incl_vy] := hsem _ _ _ hey ok_vy.
+        exists vy' => //.
+        rewrite -ok_vy'.
+        apply eq_on_sem_sexpr => //=.
+        move=> y' hin.
+        rewrite Vm.setP_neq //.
+        apply /eqP => /=.
+        have := hvars _ _ hey.
+        by clear -hin hnin; SvD.fsetdec.
+    + move=> y yin.
       rewrite Vm.setP_neq //.
-      apply /eqP => /=.
-      have := hvars _ _ hey.
-      by clear -hin hnin; SvD.fsetdec.
-    + apply: vm_uincl_set_r (vm_uincl_refl _).
-      rewrite (hwft.(wft_undef) hnin).
-      by apply/compat_value_uincl_undef/vm_truncate_val_compat.
-    move=> gd v1.
-    rewrite /get_gvar hlvar /= /get_var Vm.setP_eq.
-    rewrite compat_val_vm_truncate_val; last first.
-    + by rewrite clone_ty; apply Vm.getP.
-    by move=> ?; exists v1.
-  - move=> op e he table table' e' se.
-    apply: obindP => -[{}table' {}e'] hsyme [<- <-] hwft.
-    have [vme1 [hwft1 hincl1 hseme1]] := he _ _ _ _ hsyme hwft.
+      apply /eqP.
+      by clear -hnin yin; congruence.
+    exists v' => //.
+    rewrite get_var_eq clone_ty;
+      last by apply subtype_truncatable; rewrite -ty_v'.
+    by rewrite def_v' /= vm_truncate_val_eq.
+  - move=> op e he table table' e' v vme.
+    apply: obindP => op' ok_op'.
+    apply: obindP => -[{}table' {}e'] hsyme [<- <-].
+    t_xrbindP=> ve ok_ve ok_v hwft.
+    have [vme1 [hwft1 hincl1 hseme1]] := he _ _ _ _ _ hsyme ok_ve hwft.
     exists vme1; split=> //=.
-    t_xrbindP=> gd v1 ve /hseme1 [v2 -> hincl] ok_v1 /=.
-    exists v1 => //.
-    exact: (vuincl_sem_sop1 hincl ok_v1).
-  - move=> op e1 he1 e2 he2 table table' e' se.
+    have [v' ok_v' incl_v] := hseme1.
+    case: op ok_op' ok_v => //.
+    + move=> ws [<-] /=.
+      rewrite ok_v' /=.
+      move=> /(vuincl_sem_sop1 incl_v) ->.
+      by eexists; first by reflexivity.
+    + move=> ws [<-] /=.
+      rewrite ok_v' /=.
+      move=> /(vuincl_sem_sop1 incl_v) ->.
+      by eexists; first by reflexivity.
+    move=> opk [<-] /=.
+    rewrite ok_v' /=.
+    move=> /(vuincl_sem_sop1 incl_v) ->.
+    by eexists; first by reflexivity.
+  - move=> op e1 he1 e2 he2 table table' e' v vme.
+    apply: obindP => op' ok_op'.
     apply: obindP => -[table1 e1'] hsyme1.
     apply: obindP => -[table2 e2'] hsyme2.
-    move=> [<- <-] hwft.
-    have [vme1 [hwft1 hincl1 hseme1]] := he1 _ _ _ _ hsyme1 hwft.
-    have [vme2 [hwft2 hincl2 hseme2]] := he2 _ _ _ _ hsyme2 hwft1.
+    move=> [<- <-].
+    t_xrbindP=> ve1 ok_ve1 ve2 ok_ve2 ok_v hwft.
+    have [vme1 [hwft1 hincl1 hseme1]] := he1 _ _ _ _ _ hsyme1 ok_ve1 hwft.
+    have [vme2 [hwft2 hincl2 hseme2]] := he2 _ _ _ _ _ hsyme2 ok_ve2 hwft1.
     exists vme2; split=> //=.
-    + exact: vm_uinclT hincl1 hincl2.
-    t_xrbindP=> gd v ve1 /hseme1 [v1 ok_v1 incl_v1] ve2
-      /hseme2 [v2 ok_v2 incl_v2] ok_v.
-    have [v1' ok_v1' incl_v1'] := sem_pexpr_uincl hincl2 ok_v1.
-    rewrite ok_v1' ok_v2 /=.
-    exists v => //.
-    exact: (vuincl_sem_sop2 (value_uincl_trans incl_v1 incl_v1') incl_v2 ok_v).
-  + move=> op es hes table table' e' se.
-    apply: obindP => -[table1 es'] hsymes.
-    move=> [<- <-] hwft.
-    have [vme1 [hwft1 hincl1 hseme1]] := hes _ _ _ _ hsymes hwft.
-    exists vme1; split=> //=.
-    t_xrbindP=> gd v1 vs1 /hseme1 [vs2 ok_vs2 hincls] ok_v1.
-    rewrite -/(sem_pexprs _ _ _ _) ok_vs2 /=.
-    exists v1 => //.
-    exact: (vuincl_sem_opN hincls ok_v1).
-  move=> ty b hb e1 he1 e2 he2 table table' e' se.
-  apply: obindP => -[table1 b'] hsymb.
-  apply: obindP => -[table2 e1'] hsyme1.
-  apply: obindP => -[table3 e2'] hsyme2.
-  move=> [<- <-] hwft.
-  have [vmeb [hwftb hinclb hsemb]] := hb _ _ _ _ hsymb hwft.
-  have [vme1 [hwft1 hincl1 hseme1]] := he1 _ _ _ _ hsyme1 hwftb.
-  have [vme2 [hwft2 hincl2 hseme2]] := he2 _ _ _ _ hsyme2 hwft1.
-  exists vme2; split=> //=.
-  + apply: vm_uinclT hincl2.
-    exact: vm_uinclT hinclb hincl1.
-  t_xrbindP=> gd v bb vb /hsemb [vb' ok_vb' incl_vb'] ok_bb
-    ve1' ve1 /hseme1 [v1 ok_v1 incl_v1] ok_ve1'
-    ve2' ve2 /hseme2 [v2 ok_v2 incl_v2] ok_ve2' eq_v.
-  have [vb'' ok_vb'' incl_vb''] := sem_pexpr_uincl hincl1 ok_vb'.
-  have [vb''' ok_vb''' incl_vb'''] := sem_pexpr_uincl hincl2 ok_vb''.
-  have [v1' ok_v1' incl_v1'] := sem_pexpr_uincl hincl2 ok_v1.
-  rewrite ok_vb''' ok_v1' ok_v2 /=.
-  have incl_vb: value_uincl vb vb'''.
-  + apply: value_uincl_trans incl_vb'''.
-    exact: value_uincl_trans incl_vb' incl_vb''.
-  have /= -> := of_value_uincl_te (ty:=sbool) incl_vb ok_bb.
-  have [v1'' -> incl_v1''] := value_uincl_truncate (value_uincl_trans incl_v1 incl_v1') ok_ve1'.
-  have [v2'' -> incl_v2''] /= := value_uincl_truncate incl_v2 ok_ve2'.
-  eexists; first by reflexivity.
-  rewrite -eq_v.
-  by case: (bb).
+    + apply: (eq_onT hincl1).
+      apply: eq_onI hincl2.
+      by apply (symbolic_of_pexpr_subset_vars hsyme1 hwft.(wft_vars)).
+    have [v1' ok_v1' incl_v1] := hseme1.
+    have [v2' ok_v2' incl_v2] := hseme2.
+    case: op ok_op' ok_v => //.
+    + move=> opk [<-] /=.
+      have ok_v1'': sem_sexpr vme2 e1' = ok v1'.
+      + have heq: vme1 =[read_e e1'] vme2.
+        + apply: eq_onI hincl2.
+          by apply (symbolic_of_pexpr_subset_read hsyme1 hwft.(wft_vars)).
+        by rewrite -(eq_on_sem_sexpr heq).
+      rewrite ok_v1'' ok_v2' /=.
+      move=> /(vuincl_sem_sop2 incl_v1 incl_v2) ->.
+      by eexists; first by reflexivity.
+    + move=> opk [<-] /=.
+      have ok_v1'': sem_sexpr vme2 e1' = ok v1'.
+      + have heq: vme1 =[read_e e1'] vme2.
+        + apply: eq_onI hincl2.
+          by apply (symbolic_of_pexpr_subset_read hsyme1 hwft.(wft_vars)).
+        by rewrite -(eq_on_sem_sexpr heq).
+      rewrite ok_v1'' ok_v2' /=.
+      move=> /(vuincl_sem_sop2 incl_v1 incl_v2) ->.
+      by eexists; first by reflexivity.
+    move=> opk [<-] /=.
+    have ok_v1'': sem_sexpr vme2 e1' = ok v1'.
+    + have heq: vme1 =[read_e e1'] vme2.
+      + apply: eq_onI hincl2.
+        by apply (symbolic_of_pexpr_subset_read hsyme1 hwft.(wft_vars)).
+      by rewrite -(eq_on_sem_sexpr heq).
+    rewrite ok_v1'' ok_v2' /=.
+    move=> /(vuincl_sem_sop2 incl_v1 incl_v2) ->.
+    by eexists; first by reflexivity.
 Qed.
 
 Definition wf_table_symbolic_of_pexpr := wf_table_symbolic_of_pexpr_e_es.1.

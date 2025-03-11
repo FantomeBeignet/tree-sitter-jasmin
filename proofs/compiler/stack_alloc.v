@@ -1370,12 +1370,64 @@ Definition incl (rmap1 rmap2:region_map) :=
   Mvar.incl (fun _ => eq_op) rmap1.(var_region) rmap2.(var_region) &&
   Mr.incl (fun _ => incl_status_map) rmap1.(region_var) rmap2.(region_var).
 
+Definition type_of_op_kind opk :=
+  match opk with
+  | Op_int => sint
+  | Op_w ws => sword ws
+  end.
+
+Fixpoint typecheck e :=
+  match e with
+  | Sconst n => ok sint
+  | Svar x => ok x.(vtype)
+  | Sof_int ws e =>
+    Let ty := typecheck e in
+    if ty is sint then ok (sword ws)
+    else Error (E.stk_ierror_no_var "typechecking failed")
+  | Sto_int ws e =>
+    Let ty := typecheck e in
+    if subtype (sword ws) ty then ok sint
+    else Error (E.stk_ierror_no_var "typechecking failed")
+  | Sneg opk e =>
+    let opk_ty := type_of_op_kind opk in
+    Let ty := typecheck e in
+    if subtype opk_ty ty then ok opk_ty
+    else Error (E.stk_ierror_no_var "typechecking failed")
+  | Sadd opk e1 e2 | Smul opk e1 e2 | Ssub opk e1 e2 =>
+    let opk_ty := type_of_op_kind opk in
+    Let ty1 := typecheck e1 in
+    Let ty2 := typecheck e2 in
+    if subtype opk_ty ty1 && subtype opk_ty ty2 then ok opk_ty
+    else Error (E.stk_ierror_no_var "typechecking failed")
+  end.
+
+Definition typecheck_slice s :=
+  match typecheck s.(ss_ofs), typecheck s.(ss_len) with
+  | ok _ sint, ok _ sint => true
+  | _, _ => false
+  end.
+
 Definition merge_interval (i1 i2 : intervals) :=
   foldl (fun acc s =>
     let%opt acc := acc in
     add_sub_interval acc s) (Some i2) i1.
 
-Definition merge_status (_x:var) (status1 status2: option status) :=
+Fixpoint read_e_rec s (e : sexpr) :=
+  match e with
+  | Sconst _ => s
+  | Svar x => Sv.add x s
+  | Sto_int _ e | Sof_int _ e | Sneg _ e => read_e_rec s e
+  | Sadd _ e1 e2 | Smul _ e1 e2 | Ssub _ e1 e2 => read_e_rec (read_e_rec s e1) e2
+  end.
+Definition read_es_rec := foldl read_e_rec.
+
+Definition read_e := read_e_rec Sv.empty.
+Definition read_es := read_es_rec Sv.empty.
+
+Definition read_slice s :=
+  Sv.union (read_e s.(ss_ofs)) (read_e s.(ss_len)).
+
+Definition merge_status vars (_x:var) (status1 status2: option status) :=
   let%opt status1 := status1 in
   let%opt status2 := status2 in
   match status1, status2 with
@@ -1383,26 +1435,28 @@ Definition merge_status (_x:var) (status1 status2: option status) :=
   | Valid, s | s, Valid => Some s
   | Borrowed i1, Borrowed i2 =>
     let%opt i := merge_interval i1 i2 in
-    Some (Borrowed i)
+    if all (fun s => Sv.subset (read_slice s) vars && typecheck_slice s) i then
+      Some (Borrowed i)
+    else None
   end.
 
-Definition merge_status_map (_r:region) (bm1 bm2: option status_map) :=
+Definition merge_status_map vars (_r:region) (bm1 bm2: option status_map) :=
   match bm1, bm2 with
   | Some bm1, Some bm2 =>
-    let bm := Mvar.map2 merge_status bm1 bm2 in
+    let bm := Mvar.map2 (merge_status vars) bm1 bm2 in
     if Mvar.is_empty bm then None
     else Some bm
   | _, _ => None
   end.
 
-Definition merge (rmap1 rmap2:region_map) :=
+Definition merge vars (rmap1 rmap2:region_map) :=
   {| var_region :=
        Mvar.map2 (fun _ osr1 osr2 =>
         match osr1, osr2 with
         | Some sr1, Some sr2 => if sr1 == sr2 then osr1 else None
         | _, _ => None
         end) rmap1.(var_region) rmap2.(var_region);
-     region_var := Mr.map2 merge_status_map rmap1.(region_var) rmap2.(region_var) |}.
+     region_var := Mr.map2 (merge_status_map vars) rmap1.(region_var) rmap2.(region_var) |}.
 
 Definition incl_table (table1 table2 : table) := [&&
   Mvar.incl (fun _ => eq_op) table1.(bindings) table2.(bindings),
@@ -1421,7 +1475,7 @@ Fixpoint loop2 (n:nat) table (rmap:region_map) :=
     if incl_table table table2 && incl rmap rmap2 then ok (table1, rmap1, c)
     else
       let table := merge_table table table2 in
-      let rmap := merge rmap rmap2 in
+      let rmap := merge table.(vars) rmap rmap2 in
       loop2 n table rmap
   end.
 
@@ -1729,7 +1783,7 @@ Fixpoint alloc_i sao (trmap:table*region_map) (i: instr) : cexec (table * region
       Let: (table1, rmap1, c1) := fmapM (alloc_i sao) (table, rmap) c1 in
       Let: (table2, rmap2, c2) := fmapM (alloc_i sao) (table, rmap) c2 in
       let table := merge_table table1 table2 in
-      let rmap := merge rmap1 rmap2 in
+      let rmap := merge table.(vars) rmap1 rmap2 in
       ok (table, rmap, [:: MkI ii (Cif e (flatten c1) (flatten c2))])
 
     | Cwhile a c1 e c2 =>
