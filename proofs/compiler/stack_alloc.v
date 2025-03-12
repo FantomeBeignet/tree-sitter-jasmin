@@ -247,7 +247,7 @@ Fixpoint get_sub_interval (i : intervals) s : bool :=
   match i with
   | [::] => true (* valid *)
   | s' :: i =>
-    if symbolic_slice_beq s s' then false (* fully borrowed: unknown *)
+    if s == s' then false (* fully borrowed: unknown *)
     else if odflt false (symbolic_slice_ble s s') then true (* valid *)
     else if odflt false (symbolic_slice_ble s' s) then get_sub_interval i s
     else
@@ -260,7 +260,7 @@ Fixpoint add_sub_interval (i : intervals) s : option intervals :=
   match i with
   | [::] => Some [:: s]
   | s' :: i' =>
-    if symbolic_slice_beq s s' then Some i (* s was already borrowed *)
+    if s == s' then Some i (* s was already borrowed *)
     else if odflt false (symbolic_slice_ble s s') then Some (s :: i)
     else if odflt false (symbolic_slice_ble s' s) then
       let%opt i'' := add_sub_interval i' s in
@@ -274,7 +274,7 @@ Fixpoint remove_sub_interval (i : intervals) s : intervals :=
   match i with
   | [::] => [::]
   | s' :: i' =>
-    if symbolic_slice_beq s s' then i'
+    if s == s' then i'
     else if odflt false (symbolic_slice_ble s s') then i
     else
       (* special case: everything is constant
@@ -540,7 +540,7 @@ Fixpoint get_suffix (z1 z2 : symbolic_zone) : option (option symbolic_zone) :=
     match z2 with
     | [::] => None
     | s2 :: z2 =>
-      if symbolic_slice_beq s1 s2 then get_suffix z1 z2
+      if s1 == s2 then get_suffix z1 z2
       else if odflt false (symbolic_slice_ble s1 s2) then Some None
       else if odflt false (symbolic_slice_ble s2 s1) then Some None
       else
@@ -1353,7 +1353,7 @@ Definition alloc_lvals rmap rs tys :=
 Section LOOP.
 
 Definition incl_interval (i1 i2: intervals) : bool :=
-  all (fun s1 => has (symbolic_slice_beq s1) i2) i1.
+  all (fun s1 => s1 \in i2) i1.
 
 Definition incl_status status1 status2 :=
   match status1, status2 with
@@ -1564,7 +1564,7 @@ Fixpoint disjoint_zones z1 z2 : bool :=
   match z1, z2 with
   | [::], _ | _, [::] => false
   | s1 :: z1, s2 :: z2 =>
-    if symbolic_slice_beq s1 s2 then disjoint_zones z1 z2
+    if s1 == s2 then disjoint_zones z1 z2
     else if odflt false (symbolic_slice_ble s1 s2) then true
     else if odflt false (symbolic_slice_ble s2 s1) then true
     else (* not disjoint (or at least it was not proved) *)
