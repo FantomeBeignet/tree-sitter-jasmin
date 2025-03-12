@@ -248,8 +248,12 @@ Fixpoint get_sub_interval (i : intervals) s : bool :=
   | [::] => true (* valid *)
   | s' :: i =>
     if s == s' then false (* fully borrowed: unknown *)
-    else if odflt false (symbolic_slice_ble s s') then true (* valid *)
-    else if odflt false (symbolic_slice_ble s' s) then get_sub_interval i s
+    else if odflt false (symbolic_slice_ble s s') then
+      (* valid; we don't maintain that the list is sorted, so we make a
+         recursive call  *)
+      get_sub_interval i s
+    else if odflt false (symbolic_slice_ble s' s) then
+      get_sub_interval i s (* valid *)
     else
       false (* non-disjoint: unknown *)
   end.

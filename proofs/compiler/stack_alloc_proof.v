@@ -2633,21 +2633,39 @@ Proof.
   by rewrite (eq_on_sub_region_addr (eq_onI (hvarsz _ _ hsr) vme_eq)).
 Qed.
 
-(*
+Lemma subset_vars_wf_rmap vars1 vars2 rmap vme s1 s2 :
+  Sv.Subset vars1 vars2 ->
+  wf_rmap vars1 rmap vme s1 s2 ->
+  wf_rmap vars2 rmap vme s1 s2.
+Proof.
+  move=> hsubset.
+  case=> hwfsr hwfst hvarsz hvarss hval hptr.
+  split=> //.
+  + move=> x sr /hvarsz.
+    rewrite /wf_vars_zone.
+    by clear -hsubset; SvD.fsetdec.
+  move=> r x.
+  have := hvarss r x.
+  case: get_var_status => //= i.
+  rewrite /wf_vars_interval.
+  by clear -hsubset; SvD.fsetdec.
+Qed.
+
 Lemma valid_state_eq_on vme vme' table table' rmap m0 s1 s2 :
-  vme =[table'.(vars)] vme' ->
+  vme =[table.(vars)] vme' ->
+  Sv.Subset table.(vars) table'.(vars) ->
   wf_table table' vme' s1.(evm) ->
   valid_state table rmap vme m0 s1 s2 ->
   valid_state table' rmap vme' m0 s1 s2.
 Proof.
-  move=> vme_eq hwft'.
+  move=> vme_eq hsubset hwft'.
   case=>
     /= hscs hvalid hdisj hincl hincl2 hunch hrip hrsp heqvm hwft hwfr heqmem
     hglobv htop.
   split=> //.
-  apply: wf_rmap_eq_on.
+  apply (subset_vars_wf_rmap hsubset).
+  by apply: wf_rmap_eq_on.
 Qed.
-*)
 
 Lemma wf_table_set_var table se vm x v :
   wf_table table se vm ->
@@ -4357,14 +4375,38 @@ Proof.
   by case: eqP; [congruence|auto].
 Qed.
 
-Lemma wfr_STATUS_set_move se status rmap x sr :
+Lemma wfr_STATUS_set_move_status se status rv x r :
   wf_status se status ->
-  wfr_STATUS rmap se ->
-  wfr_STATUS (set_move rmap x sr status) se.
+  wfr_STATUS rv se ->
+  wfr_STATUS (set_move_status rv x r status) se.
 Proof.
   move=> hwfs hwfst.
-  move /wfr_STATUS_alt in hwfst; apply wfr_STATUS_alt.
-  move=> r y /=.
+  move=> ry y.
+  rewrite get_var_status_set_move_status.
+  case: eq_op => //=.
+  by case: eq_op.
+Qed.
+
+Lemma wfr_VARS_ZONE_set_move vars rmap x sr status :
+  wf_vars_zone vars sr.(sr_zone) ->
+  wfr_VARS_ZONE vars rmap ->
+  wfr_VARS_ZONE vars (set_move rmap x sr status).
+Proof.
+  move=> hvars hvarsz.
+  move=> y sry /=.
+  rewrite Mvar.setP.
+  case: eqP => _.
+  + by move=> [<-].
+  by apply hvarsz.
+Qed.
+
+Lemma wfr_VARS_STATUS_set_move_status vars rv x r status :
+  wf_vars_status vars status ->
+  wfr_VARS_STATUS vars rv ->
+  wfr_VARS_STATUS vars (set_move_status rv x r status).
+Proof.
+  move=> hvars hvarss.
+  move=> ry y.
   rewrite get_var_status_set_move_status.
   case: eq_op => //=.
   by case: eq_op.
@@ -4419,21 +4461,25 @@ Lemma valid_state_set_move table rmap se m0 s1 s2 x sr status pk v :
   valid_state table rmap se m0 s1 s2 ->
   wf_sub_region se sr x.(vtype) ->
   wf_status se status ->
+  wf_vars_zone table.(vars) sr.(sr_zone) ->
+  wf_vars_status table.(vars) status ->
   get_local pmap x = Some pk ->
   valid_pk rmap.(region_var) se s2 sr pk ->
   truncatable true (vtype x) v ->
   eq_sub_region_val x.(vtype) se (emem s2) sr status (vm_truncate_val (vtype x) v) ->
   valid_state (remove_binding table x) (set_move rmap x sr status) se m0 (with_vm s1 (evm s1).[x <- v]) s2.
 Proof.
-  move=> hvs hwf hwfs hlx hpk htr heqval.
+  move=> hvs hwf hwfs sr_vars status_vars hlx hpk htr heqval.
   case:(hvs) => hscs hvalid hdisj hincl hincl2 hunch hrip hrsp heqvm hwft hwfr heqmem hglobv htop.
   constructor=> //=.
   + move=> y hget; rewrite Vm.setP_neq; first by apply heqvm.
     by apply /eqP; rewrite /get_local in hlx; congruence.
   + by apply wf_table_set_var.
-  case: (hwfr) => hwfsr hwfst hval hptr; split.
+  case: (hwfr) => hwfsr hwfst hvarsz hvarss hval hptr; split.
   + by apply: (wfr_WF_set hwf _ hwfsr).
-  + by apply (wfr_STATUS_set_move hwfs hwfst).
+  + by apply (wfr_STATUS_set_move_status _ _ hwfs hwfst).
+  + by apply (wfr_VARS_ZONE_set_move sr_vars hvarsz).
+  + by apply (wfr_VARS_STATUS_set_move_status _ _ status_vars hvarss).
   + by apply (wfr_VAL_set_move htr heqval hval).
   by apply (wfr_PTR_set_move hlx hpk hptr).
 Qed.
@@ -4443,6 +4489,8 @@ Lemma valid_state_set_move_regptr table rmap se m0 s1 s2 x sr status v p addr :
   wf_sub_region se sr x.(vtype) ->
   sub_region_addr se sr = ok addr ->
   wf_status se status ->
+  wf_vars_zone table.(vars) sr.(sr_zone) ->
+  wf_vars_status table.(vars) status ->
   get_local pmap x = Some (Pregptr p) ->
   truncatable true (vtype x) v ->
   eq_sub_region_val x.(vtype) se (emem s2) sr status (vm_truncate_val (vtype x) v) ->
@@ -4450,7 +4498,7 @@ Lemma valid_state_set_move_regptr table rmap se m0 s1 s2 x sr status v p addr :
        (with_vm s1 (evm s1).[x <- v])
        (with_vm s2 (evm s2).[p <- Vword addr]).
 Proof.
-  move=> hvs hwf haddr hwfs hlx htr heqval.
+  move=> hvs hwf haddr hwfs sr_vars status_vars hlx htr heqval.
   have /wf_locals /= hlocal := hlx.
   case:(hvs) => hscs hvalid hdisj hincl hincl2 hunch hrip hrsp heqvm hwft hwfr heqmem hglobv htop.
   constructor=> //=.
@@ -4463,9 +4511,11 @@ Proof.
     rewrite Vm.setP_neq; last by apply/eqP; have := hlocal.(wfr_new); congruence.
     by apply heqvm.
   + by apply wf_table_set_var.
-  case: (hwfr) => hwfsr hwfst hval hptr; split.
+  case: (hwfr) => hwfsr hwfst hvarsz hvarss hval hptr; split.
   + by apply: (wfr_WF_set hwf _ hwfsr).
-  + by apply (wfr_STATUS_set_move hwfs hwfst).
+  + by apply (wfr_STATUS_set_move_status _ _ hwfs hwfst).
+  + by apply (wfr_VARS_ZONE_set_move sr_vars hvarsz).
+  + by apply (wfr_VARS_STATUS_set_move_status _ _ status_vars hvarss).
   + by apply (wfr_VAL_set_move htr heqval hval).
   move=> y sry.
   have htrp : truncatable true (vtype p) (Vword addr).
@@ -4562,6 +4612,8 @@ Lemma valid_state_set_stack_ptr table rmap se m0 s1 s2 x s ofs ws cs f paddr mem
   wf_sub_region se sr x.(vtype) ->
   sub_region_addr se sr = ok addr ->
   wf_status se status ->
+  wf_vars_zone table.(vars) sr.(sr_zone) ->
+  wf_vars_status table.(vars) status ->
   get_local pmap x = Some (Pstkptr s ofs ws cs f) ->
   sub_region_addr se (sub_region_stkptr s ws cs) = ok paddr ->
   stack_stable (emem s2) mem2 ->
@@ -4577,7 +4629,7 @@ Lemma valid_state_set_stack_ptr table rmap se m0 s1 s2 x s ofs ws cs f paddr mem
     (set_stack_ptr (set_move rmap x sr status) s ws cs f)
     se m0 (with_vm s1 (evm s1).[x <- v]) (with_mem s2 mem2).
 Proof.
-  move=> hvs hwf haddr hwfs hlx hpaddr hss hvalideq hreadeq hreadptr htr heqval.
+  move=> hvs hwf haddr hwfs sr_vars status_vars hlx hpaddr hss hvalideq hreadeq hreadptr htr heqval.
   have /wf_locals hlocal := hlx.
   have hwf' := sub_region_stkptr_wf se hlocal.
   case:(hvs) => hscs hvalid hdisj hincl hincl2 hunch hrip hrsp heqvm hwft hwfr heqmem hglobv htop.
@@ -4589,11 +4641,15 @@ Proof.
   + move=> y hget; rewrite Vm.setP_neq; first by apply heqvm.
     by apply/eqP; rewrite /get_local in hlx; congruence.
   + by apply wf_table_set_var.
-  case: (hwfr) => hwfsr hwfst hval hptr.
+  case: (hwfr) => hwfsr hwfst hvarsz hvarss hval hptr.
   have hwfsr': wfr_WF (set_move rmap x sr status) se.
   + by apply: (wfr_WF_set hwf _ hwfsr).
   have hwfst': wfr_STATUS (set_move rmap x sr status) se.
-  + by apply (wfr_STATUS_set_move hwfs hwfst).
+  + by apply (wfr_STATUS_set_move_status _ _ hwfs hwfst).
+  have hvarsz': wfr_VARS_ZONE table.(vars) (set_move rmap x sr status).
+  + by apply (wfr_VARS_ZONE_set_move sr_vars hvarsz).
+  have hvarss': wfr_VARS_STATUS table.(vars) (set_move rmap x sr status).
+  + by apply (wfr_VARS_STATUS_set_move_status _ _ status_vars hvarss).
   have hval': wfr_VAL (set_move rmap x sr status) se (with_vm s1 (evm s1).[x <- v]) s2.
   + by apply (wfr_VAL_set_move htr heqval hval).
   have hnnew: forall y' sry',
@@ -4605,15 +4661,17 @@ Proof.
     + by move=> <- _; apply (wf_vnew hlx).
     by move=> _; apply (var_region_not_new hptr).
   split=> //.
-  + by apply: (wfr_STATUS_set_word_pure hwfsr' hwf' _ hwfst').
+  + by apply: (wfr_STATUS_set_word_status _ hwfsr' hwf' _ hwfst').
+  + apply wfr_VARS_STATUS_set_word_status => //.
+    rewrite /wf_vars_zone /= /read_slice /= /read_e /=.
+    by clear; SvD.fsetdec.
   + move=> y sry statusy vy /=.
     move=> /(check_gvalid_set_stack_ptr hnnew hlocal.(wfs_new)) [].
     + move=> [hnglob hneq heqr hsry /= ->] hgety.
       have := check_gvalid_lvar hsry; rewrite mk_lvar_nglob // => hgvalidy.
       have /= hwfy := check_gvalid_wf hwfsr' hgvalidy.
       assert (heqvaly := hval' _ _ _ _ hgvalidy hgety).
-      apply: (eq_sub_region_val_same_region hwf' hpaddr hsry hwfy heqr hreadeq _ heqvaly).
-      by move /wfr_STATUS_alt in hwfst'.
+      by apply: (eq_sub_region_val_same_region hwf' hpaddr hsry hwfy heqr hreadeq _ heqvaly).
     move=> [? hneqr hgvalidy] hgety.
     have /= hwfy := check_gvalid_wf hwfsr' hgvalidy.
     assert (heqvaly := hval' _ _ _ _ hgvalidy hgety).
@@ -4661,6 +4719,109 @@ Proof.
   by rewrite if_same.
 Qed.
 
+Lemma incl_interval_remove_sub_interval i s :
+  incl_interval (remove_sub_interval i s) i.
+Proof.
+  elim: i => [//|s1 i ih] /=.
+  case: eqP => _.
+  + by apply incl_interval_cons.
+  case: ifP => _.
+  + by apply incl_interval_refl.
+  have hsub: incl_interval (s1 :: remove_sub_interval i s) (s1 :: i).
+  + rewrite /= mem_head /=.
+    apply: (incl_interval_trans ih (incl_interval_cons _ _)).
+  case: is_const => [ofs|//].
+  case: is_const => [len|//].
+  case: is_const => [ofs1|//].
+  case: is_const => [len1|//].
+  case: ifP => _ //.
+  by apply: (incl_interval_trans ih (incl_interval_cons _ _)).
+Qed.
+
+Lemma wf_interval_remove_sub_interval vme i s :
+  wf_interval vme i ->
+  wf_interval vme (remove_sub_interval i s).
+Proof.
+  apply incl_interval_wf_interval.
+  by apply incl_interval_remove_sub_interval.
+Qed.
+
+Lemma incl_interval_read_interval i1 i2 :
+  incl_interval i1 i2 ->
+  Sv.Subset (read_interval i1) (read_interval i2).
+Proof.
+  elim: i1 => [|s1 i1 ih1] /=.
+  + move=> _.
+    by clear; SvD.fsetdec.
+  move=> /andP [hin {}/ih1].
+  have: Sv.Subset (read_slice s1) (read_interval i2).
+  + elim: i2 s1 hin => [//|s2 i2 ih2] s1 /=.
+    rewrite in_cons.
+    case/orP.
+    + move=> /eqP <-.
+      by clear; SvD.fsetdec.
+    move=> /ih2.
+    by clear; SvD.fsetdec.
+  by clear; SvD.fsetdec.
+Qed.
+
+Lemma remove_sub_interval_vars i s :
+  Sv.Subset (read_interval (remove_sub_interval i s)) (read_interval i).
+Proof.
+  apply incl_interval_read_interval.
+  by apply incl_interval_remove_sub_interval.
+Qed.
+
+(* the only useful lemma, we just need correctness *)
+Lemma remove_sub_interval_1 vme i s cs off :
+  sem_slice vme s = ok cs ->
+  valid_offset_interval vme (remove_sub_interval i s) off ->
+  ~ offset_in_concrete_slice cs off ->
+  valid_offset_interval vme i off.
+Proof.
+  move=> ok_cs off_valid off_nin_cs ci ok_ci off_in_ci.
+  have [ci2 ok_ci2]:
+    exists ci, mapM (sem_slice vme) (remove_sub_interval i s) = ok ci.
+  + apply wf_interval_remove_sub_interval.
+    by exists ci.
+  move: off_valid; rewrite /valid_offset_interval ok_ci2 => /(_ _ erefl).
+  apply; move: off_in_ci off_nin_cs.
+  elim: i ci ci2 ok_ci ok_ci2 => [|s' i ih] ci ci2 /=.
+  + by move=> [<-] [<-].
+  t_xrbindP=> cs' ok_cs' {}ci ok_ci <- /=.
+  case: eqP => [?|_].
+  + subst s'.
+    move: ok_cs'; rewrite ok_cs => -[<-].
+    rewrite ok_ci => -[<-].
+    by case/orP.
+  case: (@idP (odflt _ _)) => [hle|_].
+  + by rewrite /= ok_cs' ok_ci /= => -[<-] /=.
+  have h:
+    mapM (sem_slice vme) (s' :: remove_sub_interval i s) = ok ci2 ->
+    offset_in_concrete_slice cs' off || offset_in_concrete_interval ci off ->
+    ~ offset_in_concrete_slice cs off → offset_in_concrete_interval ci2 off.
+  + rewrite /= ok_cs' /=.
+    t_xrbindP=> {}ci2 ok_ci2 <-.
+    case/orP.
+    + by move=> hoff _ /=; apply /orP; left.
+    move=> hoff hnoff /=; apply /orP; right.
+    by apply (ih _ _ ok_ci ok_ci2 hoff hnoff).
+  move: ok_cs ok_cs'; rewrite {1 2}/sem_slice.
+  case: is_constP => // ofs.
+  case: is_constP => // len.
+  case: is_constP => // ofs'.
+  case: is_constP => // len'.
+  case: ifP => //.
+  move=> /= hb ok_cs ok_cs' ok_ci2.
+  case/orP.
+  + move: ok_cs ok_cs' => [<-] [<-] /= hoff [].
+    by apply
+      (zbetween_concrete_sliceP
+        (cs1 := {| cs_ofs := _ |}) (cs2 := {| cs_ofs := _ |}) hb hoff).
+  by apply: ih ok_ci ok_ci2.
+Qed.
+
+(*
 (* The proof would be straightforward using subseq, but it is available only for
    eqType. And intervals are not eqType. *)
 Lemma wf_interval_remove_sub_interval se i s cs :
@@ -4765,41 +4926,77 @@ Proof.
         (cs1 := {| cs_ofs := _ |}) (cs2 := {| cs_ofs := _ |}) hb hoff).
   by apply: ih ok_ci ok_ci2.
 Qed.
+*)
 
-Lemma wf_status_fill_status se status s cs :
+Lemma wf_status_fill_status se status s :
   wf_status se status ->
-  sem_slice se s = ok cs ->
   wf_status se (fill_status status s).
 Proof.
-  move=> hwfs ok_cs.
+  move=> hwfs.
   rewrite /fill_status.
   case: status hwfs => //= i i_wf.
   case: {1}remove_sub_interval => //= _ _.
-  by apply (wf_interval_remove_sub_interval i_wf ok_cs).
+  by apply (wf_interval_remove_sub_interval _ i_wf).
 Qed.
 
-Lemma wf_status_insert_status se status substatus ofs ofsi len leni x :
-  wf_status se status ->
-  wf_status se substatus ->
-  sem_pexpr true [::] se ofs >>= to_int = ok ofsi ->
-  sem_pexpr true [::] se len >>= to_int = ok leni ->
-  0 < leni ->
-  wf_status se (insert_status x status ofs len substatus).
+Lemma wf_vars_status_fill_status vars status s :
+  wf_vars_status vars status ->
+  wf_vars_status vars (fill_status status s).
 Proof.
-  move=> hwfs hwfs' ok_ofsi ok_leni gt0_leni.
+  case: status => //= i i_vars.
+  case heq: {1}remove_sub_interval => //=.
+  have := @remove_sub_interval_vars i s.
+  move: i_vars; rewrite /wf_vars_interval.
+  by clear; SvD.fsetdec.
+Qed.
+
+Lemma valid_offset_fill_status se s cs status off :
+  wf_status se status ->
+  sem_slice se s = ok cs ->
+  valid_offset se (fill_status status s) off ->
+  ~ offset_in_concrete_slice cs off ->
+  valid_offset se status off.
+Proof.
+  case: status => //= i i_wf ok_cs off_valid.
+  apply (remove_sub_interval_1 ok_cs).
+  case: remove_sub_interval off_valid => //=.
+  by move=> _ _ /= [<-].
+Qed.
+
+Lemma wf_status_insert_status vme status substatus ofs ofsi len leni x :
+  wf_status vme status ->
+  wf_status vme substatus ->
+  sem_sexpr vme ofs >>= to_int = ok ofsi ->
+  sem_sexpr vme len >>= to_int = ok leni ->
+  wf_status vme (insert_status x status ofs len substatus).
+Proof.
+  move=> hwfs hwfs' ok_ofsi ok_leni.
   rewrite /insert_status.
   case: ifP => // _.
-  have [cs ok_cs len_cs]:
-    exists2 cs,
-      sem_slice se {| ss_ofs := ofs; ss_len := len |} = ok cs &
-      0 < cs.(cs_len).
-  + rewrite /sem_slice ok_ofsi ok_leni /=.
-    by eexists; first by reflexivity.
-  have ok_cs': sem_zone se [:: {| ss_ofs := ofs; ss_len := len |}] = ok cs.
-  + by rewrite /= ok_cs.
   case: ifP => _.
-  + by apply (wf_status_fill_status hwfs ok_cs).
-  by apply (wf_status_clear_status hwfs ok_cs' len_cs).
+  + by apply (wf_status_fill_status _ hwfs).
+  have ok_cs:
+    sem_zone vme [:: {| ss_ofs := ofs; ss_len := len |}] =
+      ok {| cs_ofs := ofsi; cs_len := leni |}.
+  + by rewrite /= /sem_slice /= ok_ofsi ok_leni /=.
+  by apply (wf_status_clear_status hwfs ok_cs).
+Qed.
+
+Lemma wf_vars_status_insert_status vars x status ofs len substatus :
+  wf_vars_status vars status ->
+  wf_vars_status vars substatus ->
+  Sv.Subset (read_e ofs) vars ->
+  Sv.Subset (read_e len) vars ->
+  wf_vars_status vars (insert_status x status ofs len substatus).
+Proof.
+  move=> status_vars substatus_vars ofs_vars len_vars.
+  rewrite /insert_status.
+  case: ifP => _ //.
+  case: ifP => _.
+  + by apply wf_vars_status_fill_status.
+  apply wf_vars_status_clear_status => //.
+  rewrite /wf_vars_zone /= /read_slice /=.
+  by clear -ofs_vars len_vars; SvD.fsetdec.
 Qed.
 
 Lemma get_sub_statusP se status s cs off :
@@ -4810,65 +5007,48 @@ Lemma get_sub_statusP se status s cs off :
   valid_offset se status off.
 Proof.
   move=> + + ok_cs off_in_cs.
-  rewrite /get_sub_status.
-  case: status => //= i.
-  rewrite /valid_offset_interval.
-  elim: i => [|s' i ih] /=.
-  + by move=> _ _ _ [<-] /=.
-  case: symbolic_slice_beq => //.
+  case: status => //= i hget [ci ok_ci].
+  rewrite /valid_offset_interval ok_ci => _ [<-].
+  elim: i hget ci ok_ci => [|s' i ih] /=.
+  + by move=> _ _ [<-] /=.
+  case: eqP => _ //.
   case hle1: (odflt _ _).
-  + t_xrbindP=> _ hwf _ cs' ok_cs' ci ok_ci <- /= /orP [off_in_cs'|off_in_ci].
+  + move=> hget.
+    t_xrbindP=> _ cs' ok_cs' ci ok_ci <-.
+    move=> /= /orP [off_in_cs'|off_in_ci].
     + have hdisj := symbolic_slice_ble_disjoint hle1 ok_cs ok_cs'.
       by apply (disjoint_concrete_sliceP hdisj off_in_cs off_in_cs').
-    move: hwf; rewrite /wf_interval /= ok_cs' ok_ci /=.
-    move=> [_ [[<-] hall hsorted]].
-    move: hsorted; rewrite (path.sorted_pairwise_in concrete_slice_ble_trans) //=.
-    move=> /andP [le_ci _].
-    move: hall => /= /andP [/ZltP len_cs' _].
-    move: off_in_cs.
-    have [cs1 _ /andP[]] := all_has le_ci off_in_ci.
-    have := symbolic_slice_bleP hle1 ok_cs ok_cs'.
-    rewrite /concrete_slice_ble /offset_in_concrete_slice !zify.
-    by lia.
+    by apply (ih hget ci ok_ci off_in_ci).
   case hle2: (odflt _ _) => //.
-  move=> hget hwf.
+  move=> hget.
   t_xrbindP=> _ cs' ok_cs' ci ok_ci <-.
-  have {}hwf: wf_interval se i.
-  + move: hwf; rewrite /wf_interval /= ok_cs' ok_ci /=.
-    move=> [_ [[<-] hall hsorted]].
-    exists ci; split=> //.
-    + by move: hall => /= /andP[].
-    move: hsorted; rewrite (path.sorted_pairwise_in concrete_slice_ble_trans) //=.
-    move=> /andP[] _.
-    rewrite -(path.sorted_pairwise_in concrete_slice_ble_trans) //.
-    by move: hall => /= /andP[].
-  have h := ih hget hwf _ ok_ci.
-  move=> /= /orP[] // off_in_cs'.
-  have hdisj := symbolic_slice_ble_disjoint hle2 ok_cs' ok_cs.
-  by apply (disjoint_concrete_sliceP hdisj off_in_cs' off_in_cs).
+  move=> /= /orP [off_in_cs'|off_in_ci].
+  + have hdisj := symbolic_slice_ble_disjoint hle2 ok_cs' ok_cs.
+    by apply (disjoint_concrete_sliceP hdisj off_in_cs' off_in_cs).
+  by apply (ih hget ci ok_ci off_in_ci).
 Qed.
 
-Lemma valid_offset_insert_status_between se status substatus ofs ofsi len leni x off :
-  wf_status se status ->
-  wf_status se substatus ->
-  sem_pexpr true [::] se ofs >>= to_int = ok ofsi ->
-  sem_pexpr true [::] se len >>= to_int = ok leni ->
+Lemma valid_offset_insert_status_between vme status substatus ofs ofsi len leni x off :
+  wf_status vme status ->
+  wf_status vme substatus ->
+  sem_sexpr vme ofs >>= to_int = ok ofsi ->
+  sem_sexpr vme len >>= to_int = ok leni ->
   ofsi <= off < ofsi + leni ->
-  valid_offset se (insert_status x status ofs len substatus) off ->
-  valid_offset se substatus (off - ofsi).
+  valid_offset vme (insert_status x status ofs len substatus) off ->
+  valid_offset vme substatus (off - ofsi).
 Proof.
   move=> hwfs hwfs' ok_ofsi ok_leni hoff.
   rewrite /insert_status.
   case: andP => [|_].
-  + move=> [ofs_0 _].
-    move: ok_ofsi; rewrite (eq_exprP _ _ _ ofs_0) /= => -[<-].
+  + move=> [/eqP ? _]; subst ofs.
+    move: ok_ofsi => /= [<-].
     by rewrite Z.sub_0_r.
   case: ifP => [|_].
   + (* substatus is valid between 0 and len thanks to get_sub_status.
        We don't need the hyp about fill_status, we drop it. *)
     move=> hstatus _.
     have hslice:
-      sem_slice se {| ss_ofs := 0%Z; ss_len := len |} = ok {| cs_ofs := 0%Z; cs_len := leni |}.
+      sem_slice vme {| ss_ofs := Sconst 0; ss_len := len |} = ok {| cs_ofs := 0%Z; cs_len := leni |}.
     + by rewrite /sem_slice /= ok_leni /=.
     apply (get_sub_statusP hstatus hwfs' hslice).
     rewrite /offset_in_concrete_slice /= !zify.
@@ -4877,129 +5057,128 @@ Proof.
      contradictory with hoff. *)
   move=> off_valid.
   have hzone:
-    sem_zone se [:: {| ss_ofs := ofs; ss_len := len |}] = ok {| cs_ofs := ofsi; cs_len := leni |}.
+    sem_zone vme [:: {| ss_ofs := ofs; ss_len := len |}] = ok {| cs_ofs := ofsi; cs_len := leni |}.
   + by rewrite /= /sem_slice /= ok_ofsi ok_leni /=.
-  have gt0_leni: 0 < leni.
-  + by lia.
-  have [_ []] := valid_offset_clear_status hwfs hzone gt0_leni off_valid.
+  have [_ []] := valid_offset_clear_status hwfs hzone off_valid.
   by rewrite /offset_in_concrete_slice /= !zify.
 Qed.
 
-Lemma valid_offset_fill_status se s cs status off :
-  wf_status se status ->
-  sem_slice se s = ok cs ->
-  valid_offset se (fill_status status s) off ->
-  ~ offset_in_concrete_slice cs off ->
-  valid_offset se status off.
-Proof.
-  case: status => //= i i_wf ok_cs.
-  have [ci [ok_ci _ _]] := i_wf.
-  have [ci2 [ok_ci2 _ _]] := wf_interval_remove_sub_interval i_wf ok_cs.
-  case heq: {1}(remove_sub_interval i s) => /=.
-  + move=> _.
-    rewrite /valid_offset_interval ok_ci => off_nin_cs _ [<-] off_in_ci.
-    have := remove_sub_interval_1 ok_cs ok_ci ok_ci2 off_in_ci off_nin_cs.
-    by move: ok_ci2; rewrite heq /= => -[<-] /=.
-  rewrite /valid_offset_interval ok_ci ok_ci2
-    => /(_ _ erefl) off_nin_ci2 off_nin_cs _ [<-] off_in_ci.
-  apply off_nin_ci2.
-  by apply (remove_sub_interval_1 ok_cs ok_ci ok_ci2 off_in_ci off_nin_cs).
-Qed.
-
-Lemma valid_offset_insert_status_disjoint se status substatus ofs ofsi len leni x off :
-  wf_status se status ->
-  sem_pexpr true [::] se ofs >>= to_int = ok ofsi ->
-  sem_pexpr true [::] se len >>= to_int = ok leni ->
-  0 < leni ->
+Lemma valid_offset_insert_status_disjoint vme status substatus ofs ofsi len leni x off :
+  wf_status vme status ->
+  sem_sexpr vme ofs >>= to_int = ok ofsi ->
+  sem_sexpr vme len >>= to_int = ok leni ->
   0 <= off /\ off < size_slot x ->
   ~ ofsi <= off < ofsi + leni ->
-  valid_offset se (insert_status x status ofs len substatus) off ->
-  valid_offset se status off.
+  valid_offset vme (insert_status x status ofs len substatus) off ->
+  valid_offset vme status off.
 Proof.
-  move=> hwfs ok_ofsi ok_leni gt0_leni hoff hnoff.
+  move=> hwfs ok_ofsi ok_leni hoff hnoff.
   rewrite /insert_status.
   case: andP => [|_].
-  + move=> [eq_ofs eq_len].
-    move: ok_ofsi ok_leni.
-    rewrite (eq_exprP _ _ _ eq_ofs) (eq_exprP _ _ _ eq_len) /= => -[?] [?].
-    lia.
+  + move=> [/eqP ? /eqP ?]; subst ofs len.
+    move: ok_ofsi ok_leni => /= [?] [?]; subst ofsi leni.
+    by lia.
   have hslice:
-    sem_slice se {| ss_ofs := ofs; ss_len := len |} = ok {| cs_ofs := ofsi; cs_len := leni |}.
+    sem_slice vme {| ss_ofs := ofs; ss_len := len |} = ok {| cs_ofs := ofsi; cs_len := leni |}.
   + by rewrite /sem_slice /= ok_ofsi ok_leni /=.
   case: ifP => _.
-  + move=> off_valid.
+  + (* off is outside the slice added by fill_status *)
+    move=> off_valid.
     apply (valid_offset_fill_status hwfs hslice off_valid).
     by rewrite /offset_in_concrete_slice /= !zify.
   move=> off_valid.
   have hzone:
-    sem_zone se [:: {| ss_ofs := ofs; ss_len := len |}] = ok {| cs_ofs := ofsi; cs_len := leni |}.
+    sem_zone vme [:: {| ss_ofs := ofs; ss_len := len |}] = ok {| cs_ofs := ofsi; cs_len := leni |}.
   + by rewrite /= hslice.
-  by case: (valid_offset_clear_status hwfs hzone gt0_leni off_valid).
+  by case: (valid_offset_clear_status hwfs hzone off_valid).
 Qed.
 
-Lemma sub_region_status_at_ofs_addr se sr ty ofs ofsi ty2 x status :
-  wf_sub_region se sr ty ->
-  sem_pexpr true [::] se ofs >>= to_int = ok ofsi ->
+Lemma sub_region_status_at_ofs_addr vme sr ty ofs ofsi ty2 x status :
+  wf_sub_region vme sr ty ->
+  sem_sexpr vme ofs >>= to_int = ok ofsi ->
   0 <= ofsi /\ ofsi + size_of ty2 <= size_of ty ->
-  sub_region_addr se (sub_region_status_at_ofs x sr status ofs (size_of ty2)).1 =
-    sub_region_addr se (sub_region_at_ofs sr ofs (size_of ty2)).
+  sub_region_addr vme (sub_region_status_at_ofs x sr status ofs (Sconst (size_of ty2))).1 =
+    sub_region_addr vme (sub_region_at_ofs sr ofs (Sconst (size_of ty2))).
 Proof.
   move=> hwf ok_ofsi hofsi.
   rewrite /sub_region_status_at_ofs.
   case: andP => [|//] /=.
-  move=> [ofs_0 _].
+  move=> [/eqP ofs_0 _].
   have [cs ok_cs _] := hwf.(wfsr_zone).
   have [addr haddr _] := wunsigned_sub_region_addr hwf ok_cs.
   rewrite (sub_region_addr_offset hwf ok_ofsi hofsi haddr).
-  move: ok_ofsi; rewrite (eq_exprP _ _ _ ofs_0) /= => -[<-].
+  move: ok_ofsi; rewrite ofs_0 /= => -[<-].
   by rewrite wrepr0 GRing.addr0.
+Qed.
+
+(* TODO: move? *)
+Lemma mk_ofs_int_vars aa ws e :
+  Sv.Subset (read_e (mk_ofs_int aa ws e)) (read_e e).
+Proof.
+  rewrite /mk_ofs_int.
+  case: is_const => [z|].
+  + rewrite {1}/read_e /=.
+    by clear; SvD.fsetdec.
+  by rewrite /read_e /= -/read_e.
 Qed.
 
 (* Note that we assume [eq_sub_region_val_read] only on the (sub-)sub-region
    [(sub_region_status_at_ofs x srx statusx ofs len').1].
    We do not need it for the full sub-region [srx], since we can derive it for
    the rest of [srx] from the [valid_state] hypothesis. *)
-Lemma valid_state_set_move_sub table rmap se m0 s1 s2 (x:var_i) srx pk substatus e' e aa ws len v s1' :
-  valid_state table rmap se m0 s1 s2 ->
+Lemma valid_state_set_move_sub table rmap vme m0 s1 s2 (x:var_i) srx pk substatus e' e aa ws len v s1' :
+  valid_state table rmap vme m0 s1 s2 ->
   Mvar.get rmap.(var_region) x = Some srx ->
   get_local pmap x = Some pk ->
-  wf_status se substatus ->
-  (forall z, sem_pexpr true gd s1 e >>= to_int = ok z -> sem_pexpr true [::] se e' >>= to_int = ok z) ->
+  wf_status vme substatus ->
+  wf_vars_status table.(vars) substatus ->
+  Sv.Subset (read_e e') table.(vars) ->
+  (forall z, sem_pexpr true gd s1 e >>= to_int = ok z -> sem_sexpr vme e' >>= to_int = ok z) ->
   write_lval true gd (Lasub aa ws len x e) v s1 = ok s1' ->
   let ofs := mk_ofs_int aa ws e' in
-  let len' := Pconst (arr_size ws len) in
+  let len' := Sconst (arr_size ws len) in
   let statusx := get_var_status rmap srx.(sr_region) x in
-  eq_sub_region_val_read se s2.(emem) (sub_region_status_at_ofs x srx statusx ofs len').1 substatus v ->
+  eq_sub_region_val_read vme s2.(emem) (sub_region_status_at_ofs x srx statusx ofs len').1 substatus v ->
   valid_state (remove_binding table x)
     (set_move_sub rmap srx.(sr_region) x statusx ofs len' substatus)
-    se m0 s1' s2.
+    vme m0 s1' s2.
 Proof.
-  move=> hvs hsrx hlx hwfs' heq_int hwrite ofs len' statusx hread.
+  move=> hvs hsrx hlx hwfs' substatus_vars vars_e' heq_int hwrite ofs len' statusx hread.
   have /wfr_wf hwfx := hsrx.
-  have hwfsx: wf_status se statusx.
-  + by apply (get_var_status_wf_status _ _ wfr_status).
+  have hwfsx: wf_status vme statusx.
+  + by apply wfr_status.
   move: hwrite => /=.
   apply: on_arr_varP;
     t_xrbindP=> nx ax htyx hgetx i vi ok_vi ok_i av /to_arrI ? ax' ok_ax'
       /write_varP [-> hdb htr]; subst v.
   move: heq_int; rewrite ok_vi /= ok_i => /(_ _ erefl) ok_i'.
-  have ok_ofsi: sem_pexpr true [::] se ofs >>= to_int = ok (i * mk_scale aa ws).
+  have ok_ofsi: sem_sexpr vme ofs >>= to_int = ok (i * mk_scale aa ws).
   + by rewrite (mk_ofs_intP aa ws ok_i').
-  have ok_leni: sem_pexpr true [::] se len' >>= to_int = ok (arr_size ws len).
+  have ok_leni: sem_sexpr vme len' >>= to_int = ok (arr_size ws len).
   + by [].
-  have gt0_leni := gt0_arr_size ws len.
   case:(hvs) => hscs hvalid hdisj hincl hincl2 hunch hrip hrsp heqvm hwft hwfr heqmem hglobv htop.
   constructor => //=.
   + move=> y hgety; rewrite Vm.setP_neq; first by apply heqvm.
     by apply/eqP; rewrite /get_local in hlx; congruence.
   + by apply wf_table_set_var.
-  case: (hwfr) => hwfsr hwfst hval hptr; split=> //.
-  + move /wfr_STATUS_alt in hwfst; apply wfr_STATUS_alt.
-    move=> ry y /=.
+  case: (hwfr) => hwfsr hwfst hvarsz hvarss hval hptr; split=> //.
+  + move=> ry y /=.
     rewrite get_var_status_set_move_status.
     case: eqP => //= _.
     case: eqP => //= _.
-    by apply (wf_status_insert_status x hwfsx hwfs' ok_ofsi ok_leni gt0_leni).
+    by apply (wf_status_insert_status x hwfsx hwfs' ok_ofsi ok_leni).
+  + move=> ry y /=.
+    rewrite get_var_status_set_move_status.
+    case: eqP => //= _.
+    case: eqP => //= _.
+    apply wf_vars_status_insert_status => //.
+    + by apply hvarss.
+    + rewrite /ofs.
+      have := @mk_ofs_int_vars aa ws e'.
+      move: vars_e'.
+      by clear; SvD.fsetdec.
+    rewrite /read_e /=.
+    by clear; SvD.fsetdec.
   + move=> y sry statusy vy /=.
     move=> /(check_gvalid_set_move_sub hsrx) [].
     + move=> [hnglob heq -> ->].
@@ -5012,7 +5191,7 @@ Proof.
             addr + wrepr _ (i * mk_scale aa ws) + wrepr _ (off - i * mk_scale aa ws))%R.
         + by rewrite wrepr_sub -GRing.addrA (GRing.addrC (wrepr _ _)) GRing.subrK.
         apply hread.
-        + have ->: len' = size_of (sarr (Z.to_pos (arr_size ws len))).
+        + have ->: len' = Sconst (size_of (sarr (Z.to_pos (arr_size ws len)))).
           + by rewrite /= Z2Pos.id //.
           have hbound: 
             0 <= i * mk_scale aa ws /\ i * mk_scale aa ws + size_of (sarr (Z.to_pos (arr_size ws len))) <= size_slot x.
@@ -5025,7 +5204,7 @@ Proof.
       have hgvalidx := check_gvalid_lvar hsrx.
       have /wfr_val -/(_ _ hgetx) [{}hread _] := hgvalidx.
       apply hread => //.
-      apply: (valid_offset_insert_status_disjoint hwfsx ok_ofsi ok_leni gt0_leni _ _ off_valid).
+      apply: (valid_offset_insert_status_disjoint hwfsx ok_ofsi ok_leni _ _ off_valid).
       + by rewrite htyx /=.
       by lia.
     by move=> [? hgvalid]; rewrite get_gvar_neq => //; apply hval.
@@ -5088,7 +5267,7 @@ Proof.
   constructor => //=.
   1,2: by rewrite -heq.
   + by move=> ???; rewrite -heq; apply heqvm.
-  case: hwfr => hwfsr hwfst hV hP; constructor => //.
+  case: hwfr => hwfsr hwfst hvarsz hvarss hV hP; constructor => //.
   move=> x sr /hP [pk [hgl hv]]; exists pk; split => //.
   by case: (pk) hv => //= >; rewrite heq.
 Qed.
@@ -5101,6 +5280,7 @@ Context
 Local Lemma clone_ty : forall x n, vtype (clone fresh_var_ident x n) = vtype x.
 Proof. by []. Qed.
 
+(*
 Lemma sub_region_beq_eq_sub_region_val sr1 sr2 ty se m2 status v :
   sub_region_beq sr1 sr2 ->
   eq_sub_region_val ty se m2 sr1 status v ->
@@ -5110,13 +5290,14 @@ Proof.
   rewrite -(sub_region_beq_addr se heqsub).
   by apply hread.
 Qed.
+*)
 
-Lemma sub_region_status_at_ofs_wf se sr ty ofs ofsi ty2 x status sr' status' :
-  wf_sub_region se sr ty ->
-  sem_pexpr true [::] se ofs >>= to_int = ok ofsi ->
+Lemma sub_region_status_at_ofs_wf vme sr ty ofs ofsi ty2 x status sr' status' :
+  wf_sub_region vme sr ty ->
+  sem_sexpr vme ofs >>= to_int = ok ofsi ->
   0 <= ofsi /\ ofsi + size_of ty2 <= size_of ty ->
-  sub_region_status_at_ofs x sr status ofs (size_of ty2) = (sr', status') ->
-  wf_sub_region se sr' ty2.
+  sub_region_status_at_ofs x sr status ofs (Sconst (size_of ty2)) = (sr', status') ->
+  wf_sub_region vme sr' ty2.
 Proof.
   move=> hwf ok_ofsi hofsi.
   rewrite /sub_region_status_at_ofs.
@@ -5141,54 +5322,57 @@ Proof.
   by case: ifP => _.
 Qed.
 
-Lemma valid_offset_sub_region_status_at_ofs se ofs ofsi len leni x sr status sr' status' off :
-  wf_status se status ->
-  sem_pexpr true [::] se ofs >>= to_int = ok ofsi ->
-  sem_pexpr true [::] se len >>= to_int = ok leni ->
+Lemma valid_offset_sub_region_status_at_ofs vme ofs ofsi len leni x sr status sr' status' off :
+  wf_status vme status ->
+  sem_sexpr vme ofs >>= to_int = ok ofsi ->
+  sem_sexpr vme len >>= to_int = ok leni ->
   0 <= off < leni ->
   sub_region_status_at_ofs x sr status ofs len = (sr', status') ->
-  valid_offset se status' off ->
-  valid_offset se status (ofsi + off).
+  valid_offset vme status' off ->
+  valid_offset vme status (ofsi + off).
 Proof.
   move=> hwfs ok_ofsi ok_leni hoff.
   rewrite /sub_region_status_at_ofs.
   case: andP => [|_].
-  + move=> [ofs_0 _] [_ <-].
-    by move: ok_ofsi; rewrite (eq_exprP _ _ _ ofs_0) /= => -[<-].
+  + move=> [/eqP ? _] [_ <-]; subst ofs.
+    by move: ok_ofsi => /= -[<-].
   move=> [_ <-].
   case: ifP => // hget _.
   have ok_cs:
-    sem_slice se {| ss_ofs := ofs; ss_len := len |} = ok {| cs_ofs := ofsi; cs_len := leni |}.
+    sem_slice vme {| ss_ofs := ofs; ss_len := len |} = ok {| cs_ofs := ofsi; cs_len := leni |}.
   + by rewrite /sem_slice ok_ofsi ok_leni /=.
   apply (get_sub_statusP hget hwfs ok_cs).
   rewrite /offset_in_concrete_slice /= !zify.
   by lia.
 Qed.
 
-Lemma alloc_array_moveP se m0 s1 s2 s1' table1 rmap1 table2 rmap2 r tag e v v' n i2 :
-  valid_state table1 rmap1 se m0 s1 s2 ->
+Lemma alloc_array_moveP vme m0 s1 s2 s1' table1 rmap1 table2 rmap2 r tag e v v' n i2 :
+  valid_state table1 rmap1 vme m0 s1 s2 ->
   sem_pexpr true gd s1 e = ok v ->
   truncate_val (sarr n) v = ok v' ->
   write_lval true gd r v' s1 = ok s1' ->
   alloc_array_move saparams fresh_var_ident string_of_sr pmap table1 rmap1 r tag e = ok (table2, rmap2, i2) →
-  ∃ (s2' : estate) (vme : Vm.t), [/\
+  ∃ (s2' : estate) (vme' : Vm.t), [/\
     sem_i P' rip s2 i2 s2',
-    valid_state (remove_binding_lval table2 r) rmap2 (with_vm se vme) m0 s1' s2' &
-    se.(evm) <=1 vme].
+    valid_state (remove_binding_lval table2 r) rmap2 vme' m0 s1' s2' &
+    vme =[table1.(vars)] vme'].
 Proof.
   move=> hvs he /truncate_val_typeE[] a ?? hw; subst v v'.
   rewrite /alloc_array_move.
   t_xrbindP=> -[[[[[table1' sry] statusy] mk] ey] ofsy] He.
 
-  have: exists vme wey wofsy, [/\
-    se.(evm) <=1 vme,
-    wf_table table1' (with_vm se vme) s1.(evm),
-    wf_sub_region (with_vm se vme) sry (sarr n),
-    wf_status (with_vm se vme) statusy,
+  have: exists vme' wey wofsy, [/\
+    vme =[table1.(vars)] vme',
+    Sv.Subset table1.(vars) table1'.(vars),
+    wf_table table1' vme' s1.(evm),
+    wf_sub_region vme' sry (sarr n),
+    wf_status vme' statusy,
+    wf_vars_zone table1'.(vars) (sr_zone sry),
+    wf_vars_status table1'.(vars) statusy,
     sem_pexpr true [::] s2 ey >>= to_pointer = ok wey,
-    sem_pexpr true [::] s2 ofsy >>= to_pointer = ok wofsy,
-    sub_region_addr (with_vm se vme) sry = ok (wey + wofsy)%R &
-    eq_sub_region_val (sarr n) (with_vm se vme) (emem s2) sry statusy (Varr a)].
+    sem_pexpr true [::] s2 ofsy >>= to_pointer = ok wofsy &
+    sub_region_addr vme' sry = ok (wey + wofsy)%R /\
+    eq_sub_region_val (sarr n) vme' (emem s2) sry statusy (Varr a)].
   + case: e he He => //=.
     + t_xrbindP=> y hgety vpky hkindy.
       case: vpky hkindy => [vpky|//] hkindy.
@@ -5200,16 +5384,14 @@ Proof.
       t_xrbindP=> -[ey' ofsy'] haddr <- <- <- _ <- <-.
       have [wey ok_wey haddry] :=
         addr_from_vpk_pexprP true hvs hwfpky hpky hwfy haddr.
-      exists se.(evm), wey, (wrepr Uptr ofsy'); split=> //.
-      + rewrite with_vm_same.
-        by apply hvs.(vs_wf_table).
-      + rewrite with_vm_same.
-        by rewrite -(type_of_get_gvar_array hgety).
-      + rewrite with_vm_same.
-        by apply (check_gvalid_wf_status wfr_status hgvalidy).
+      exists vme, wey, (wrepr Uptr ofsy'); split=> //.
+      + by apply hvs.(vs_wf_table).
+      + by rewrite -(type_of_get_gvar_array hgety).
+      + by apply (check_gvalid_wf_status wfr_status hgvalidy).
+      + by apply (check_gvalid_wf_vars_zone wfr_vars_zone hgvalidy).
+      + by apply (check_gvalid_wf_vars_status wfr_vars_status hgvalidy).
       + by rewrite /= truncate_word_u.
-      + by rewrite with_vm_same.
-      rewrite with_vm_same.
+      split=> //.
       assert (hval := wfr_val hgvalidy hgety).
       by rewrite -(type_of_get_gvar_array hgety).
     move=> aa ws len y e.
@@ -5222,9 +5404,11 @@ Proof.
     t_xrbindP=> -[table1'' e1] /o2rP hsym.
     case hsub: sub_region_status_at_ofs => [sry'' statusy''].
     t_xrbindP=> -[ey' ofsy'] haddr e' halloc <- <- <- _ <- <- /=.
-    have [vme [hwft huincl hsem]] :=
-      wf_table_symbolic_of_pexpr clone_ty hsym hvs.(vs_wf_table).
-    have {}hvs := valid_state_vm_uincl huincl hwft hvs.
+    move: ok_i; t_xrbindP=> vi ok_vi ok_i.
+    have [vme' [hwft vme_eq hsem]] :=
+      wf_table_symbolic_of_pexpr clone_ty hsym ok_vi hvs.(vs_wf_table).
+    have hsubset := symbolic_of_pexpr_subset_vars hsym hvs.(vs_wf_table).(wft_vars).
+    have {}hvs := valid_state_eq_on vme_eq hsubset hwft hvs.
     have /= hwfy := [elaborate check_gvalid_wf wfr_wf hgvalidy].
     have /= hwfsy := [elaborate check_gvalid_wf_status wfr_status hgvalidy].
     have hwfpky := get_var_kind_wf hkindy.
@@ -5232,32 +5416,31 @@ Proof.
     rewrite hkindy => -[_ [[<-] hpky]].
     have [wey ok_wey haddry] :=
       addr_from_vpk_pexprP true hvs hwfpky hpky hwfy haddr.
-    move: ok_i; t_xrbindP=> vi ok_vi ok_i.
     have ok_i': sem_pexpr true [::] s2 e' >>= to_int = ok i.
     + have htr: truncate_val sint vi = ok (Vint i).
       + by rewrite /truncate_val /= ok_i /=.
       have [vi' [-> +]] := alloc_eP hvs halloc ok_vi htr.
       by rewrite /truncate_val /=; t_xrbindP=> i' -> <-.
-    have ok_i'': sem_pexpr true [::] (with_vm se vme) e1 >>= to_int = ok i.
-    + have [vi1 ok_vi1 incl_vi1] := hsem _ _ ok_vi.
+    have ok_i'': sem_sexpr vme' e1 >>= to_int = ok i.
+    + have [vi1 ok_vi1 incl_vi1] := hsem.
       have /= ok_i'' := of_value_uincl_te (ty:=sint) incl_vi1 ok_i.
       by rewrite ok_vi1 /= ok_i''.
     have hint:
-      sem_pexpr true [::] (with_vm se vme) (mk_ofs_int aa ws e1) >>= to_int = ok (i * mk_scale aa ws).
+      sem_sexpr vme' (mk_ofs_int aa ws e1) >>= to_int = ok (i * mk_scale aa ws).
     + by rewrite (mk_ofs_intP aa ws ok_i'').
-    have gt0_leni := gt0_arr_size ws len.
     have hbound:
       0 <= i * mk_scale aa ws /\ i * mk_scale aa ws + size_of (sarr (Z.to_pos (arr_size ws len))) <= size_slot y.(gv).
     + rewrite hyty /= Z2Pos.id //.
       by apply (WArray.get_sub_bound ok_a).
-    have haddry': sub_region_addr (with_vm se vme) sry'' = ok (wey + wrepr Uptr (i * mk_scale aa ws + ofsy'))%R.
+    have haddry': sub_region_addr vme' sry'' = ok (wey + wrepr Uptr (i * mk_scale aa ws + ofsy'))%R.
     + have := sub_region_addr_offset hwfy hint hbound haddry.
       rewrite -(sub_region_status_at_ofs_addr y.(gv) statusy' hwfy hint hbound) /= Z2Pos.id // hsub.
       by rewrite -GRing.addrA -wrepr_add Z.add_comm.
-    exists vme, wey, (wrepr Uptr (i * mk_scale aa ws + ofsy')); split=> //.
+    exists vme', wey, (wrepr Uptr (i * mk_scale aa ws + ofsy')); split=> //.
     + move: hsub; rewrite -{1}(Z2Pos.id (arr_size ws len)) // => hsub.
       by apply (sub_region_status_at_ofs_wf hwfy hint hbound hsub).
     + by apply (sub_region_status_at_ofs_wf_status hwfsy hsub).
+    + 
     + by rewrite (mk_ofsP aa ws ofsy' ok_i') /= truncate_word_u.
     split=> // off addr w.
     rewrite haddry' => -[<-] off_valid ok_w.
@@ -5271,12 +5454,9 @@ Proof.
     move: ok_w; rewrite /= (WArray.get_sub_get8 ok_a) /=.
     by case: ifP.
 
-  move=> [vme [wey [wofsy [huincl hwft hwfy hwfsy ok_wey ok_wofsy haddry heqvaly]]]].
+  move=> [vme' [wey [wofsy [vme_eq hsubset hwft hwfy hwfsy ok_wey ok_wofsy haddry heqvaly]]]].
 
-  have {}hvs: valid_state table1' rmap1 (with_vm se vme) m0 s1 s2.
-  + case:(hvs) => hscs hvalid hdisj hincl hincl2 hunch hrip hrsp heqvm hwft' hwfr heqmem hglobv htop.
-    split=> //.
-    by apply wf_rmap_vm_uincl.
+  have {}hvs := valid_state_eq_on vme_eq hsubset hwft hvs.
 
   case: r hw => //.
   + move=> x /write_varP [ -> hdb h].
@@ -5287,9 +5467,10 @@ Proof.
     rewrite -hty -htreq in heqvaly.
 
     case: pk hlx hlocal.
-    + t_xrbindP=> s ofs' ws z sc hlx hlocal heqsub <- <- <-.
+    + t_xrbindP=> s ofs' ws z sc hlx hlocal /eqP heqsub <- <- <-.
       exists s2, vme; split=> //; first by constructor.
       (* valid_state update *)
+      have := valid_state_set_move hvs hwfy hwfsy _ _ hlx heqsub h heqvaly. sry
       by apply: (valid_state_set_move hvs hwfy hwfsy hlx heqsub h heqvaly).
 
     + move=> p hlx hlocal.
