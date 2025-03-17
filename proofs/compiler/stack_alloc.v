@@ -848,6 +848,7 @@ Definition remove_binding_lval table lv :=
   | Lvar x | Laset _ _ _ x _ | Lasub _ _ _ x _ => remove_binding table x
   | _ => table
   end.
+Definition remove_binding_lvals := foldl remove_binding_lval.
 
 (* Like in propagate_inline, we first call remove_binding_lval, then this
    function. Thus we can consider only the interesting case here. *)
@@ -1753,7 +1754,7 @@ Fixpoint alloc_i sao (trmap:table*region_map) (i: instr) : cexec (table * region
          ok (table, rs.1, [:: MkI ii rs.2])
       else
       if is_swap_array o then
-        let table := foldl remove_binding_lval table rs in
+        let table := remove_binding_lvals table rs in
         Let rs := add_iinfo ii (alloc_array_swap rmap rs t e) in
         ok (table, rs.1, [:: MkI ii rs.2])
       else
@@ -1769,8 +1770,8 @@ Fixpoint alloc_i sao (trmap:table*region_map) (i: instr) : cexec (table * region
             in
             let table := remove_binding_lval table r in
             update_table table r (head sbool (sopn_tout o)) oe (* FIXME: sbool default value, should never happen *)
-          else ok (foldl remove_binding_lval table rs)
-        | _, _, _ => ok (foldl remove_binding_lval table rs)
+          else ok (remove_binding_lvals table rs)
+        | _, _, _ => ok (remove_binding_lvals table rs)
         end
       in
       Let e  := add_iinfo ii (alloc_es rmap e (sopn_tin o)) in
@@ -1778,7 +1779,7 @@ Fixpoint alloc_i sao (trmap:table*region_map) (i: instr) : cexec (table * region
       ok (table, rs.1, [:: MkI ii (Copn rs.2 t o e)])
 
     | Csyscall rs o es =>
-      let table := foldl remove_binding_lval table rs in
+      let table := remove_binding_lvals table rs in
       Let: (rmap, c) := alloc_syscall ii rmap rs o es in
       ok (table, rmap, c)
 
