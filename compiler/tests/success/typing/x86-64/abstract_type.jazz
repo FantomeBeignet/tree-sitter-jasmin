@@ -1,0 +1,10 @@
+abstract type real;
+
+export
+fn main() -> reg u64{
+  reg u64 a;
+  reg real b1;
+  reg real b2;
+  b2 = b1;
+  return a;
+}

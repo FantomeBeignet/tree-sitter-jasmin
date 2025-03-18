@@ -52,6 +52,7 @@ Definition size_of (t:stype) :=
   | sword sz => wsize_size sz
   | sarr n   => Zpos n
   | sbool | sint => 1%Z
+  | sabstract _ => (1)%Z
   end.
 
 Definition slot := var.
@@ -404,6 +405,7 @@ Import Region.
 Section WITH_PARAMS.
 
 Context
+  {A: Tabstract}
   {asm_op : Type}
   {pd : PointerData}
   {msfsz : MSFsize}

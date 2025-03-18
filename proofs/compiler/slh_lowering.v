@@ -113,7 +113,7 @@ End E.
 Module Env.
 
   Section WITH_PARAMS.
-
+  Context {AB : Tabstract}.
   Context {fcparams : flag_combination.FlagCombinationParams}.
 
   (* We keep track of the condition of the last conditional we entered, and of
@@ -209,6 +209,7 @@ End Env.
 
 Section CHECK.
 
+Context {A: Tabstract}.
 Context
   {asm_op : Type}
   {asmop : asmOp asm_op}

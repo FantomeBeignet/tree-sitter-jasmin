@@ -26,6 +26,7 @@ End E.
 
 Section INLINE.
 
+Context {A: Tabstract}.
 Context
   {wsw : WithSubWord}
   {asm_op syscall_state : Type}

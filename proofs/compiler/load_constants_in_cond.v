@@ -16,6 +16,7 @@ End E.
 Section ASM_OP.
 
 Context
+  {A : Tabstract}
   {asm_op : Type}
   {asmop:asmOp asm_op}
   {pT : progT}.

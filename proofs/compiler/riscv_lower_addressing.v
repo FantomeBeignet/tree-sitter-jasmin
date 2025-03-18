@@ -35,7 +35,7 @@ Definition error msg := {|
 End E.
 
 Section Section.
-Context {atoI: arch_toIdent} {pT: progT}.
+Context {tabstract : Tabstract} {atoI: arch_toIdent} {pT: progT}.
 
 Section tmp.
 

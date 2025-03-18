@@ -231,6 +231,6 @@ Definition spill_prog (p: prog) : cexec prog :=
 End PROGT.
 
 Definition spill_uprog (p: _uprog) : cexec _uprog :=
-  spill_prog (p: @prog _ _ progUnit).
+  spill_prog (p: @prog _ _ _ progUnit).
 
 End ASM_OP.

@@ -164,6 +164,7 @@ Record stack_alloc_oracles : Type :=
   }.
 
 Record compiler_params
+  {tabstract : Tabstract}
   {asm_op : Type}
   {asmop : asmOp asm_op}
   (lowering_options : Type) := {
@@ -198,6 +199,7 @@ Record compiler_params
 }.
 
 Context
+  {tabstract : Tabstract}
   {reg regx xreg rflag cond asm_op extra_op : Type}
   {asm_e : asm_extra reg regx xreg rflag cond asm_op extra_op}
   {syscall_state : Type}.

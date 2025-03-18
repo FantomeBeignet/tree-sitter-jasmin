@@ -74,10 +74,13 @@ let type_of_opN op =
   List.map Conv.ty_of_cty tins, Conv.ty_of_cty tout
 
 let type_of_sopn loc pd asmOp op =
-  let valid = Sopn.i_valid (Sopn.get_instr_desc pd asmOp op) in
+  let valid =
+    Sopn.i_valid Build_Tabstract
+      (Sopn.get_instr_desc Build_Tabstract pd asmOp op)
+  in
   if not valid then error loc "invalid operator, please report";
-  List.map Conv.ty_of_cty (Sopn.sopn_tin pd asmOp op),
-  List.map Conv.ty_of_cty (Sopn.sopn_tout pd asmOp op)
+  List.map Conv.ty_of_cty (Sopn.sopn_tin Build_Tabstract pd asmOp op),
+  List.map Conv.ty_of_cty (Sopn.sopn_tout Build_Tabstract pd asmOp op)
 
 (* -------------------------------------------------------------------- *)
 
