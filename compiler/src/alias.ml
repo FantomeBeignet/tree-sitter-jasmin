@@ -47,7 +47,6 @@ let pp_alias fmt a =
 let size_of_range (lo, hi) = hi - lo
 
 let range_in_slice kind s =
-  Format.eprintf "range_in_slice: %a@." pp_slice s;
   match kind, s.kind with
   | Range (lo, hi), Range (u, v) ->
     if u + hi <= v
@@ -238,10 +237,6 @@ let opn_cc o =
   | _ -> None 
 
 let rec analyze_instr_r params cc a =
-  let pp_map fmt a =
-    Mv.iter (fun k v -> Format.fprintf fmt "%a -> %a@;" (Printer.pp_var ~debug:true) k pp_slice v) a
-  in
-  Format.eprintf "@[<v 2>analyse_instr_r@;%a@]@." pp_map a;
   function
   | Cfor _ -> assert false
   | Ccall (xs, fn, es) -> link_array_return params a xs es (cc fn)

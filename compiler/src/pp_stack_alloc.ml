@@ -12,8 +12,25 @@ let pp_region fmt r =
     PrintCommon.pp_wsize r.r_align
     r.r_writable
 
+let pp_sexpr fmt e =
+  (* we reuse the printing of standard expressions *)
+  let rec cexpr_of_sexpr e =
+    let open Expr in
+    match e with
+    | Sconst n -> Pconst n
+    | Svar x -> Pvar (mk_lvar (mk_var_i x))
+    | Sof_int (ws, e) -> Papp1 (Oword_of_int ws, cexpr_of_sexpr e)
+    | Sto_int (ws, e) -> Papp1 (Oint_of_word ws, cexpr_of_sexpr e)
+    | Sneg (opk, e) -> Papp1 (Oneg opk, cexpr_of_sexpr e)
+    | Sadd (opk, e1, e2) -> Papp2 (Oadd opk, cexpr_of_sexpr e1, cexpr_of_sexpr e2)
+    | Smul (opk, e1, e2) -> Papp2 (Omul opk, cexpr_of_sexpr e1, cexpr_of_sexpr e2)
+    | Ssub (opk, e1, e2) -> Papp2 (Osub opk, cexpr_of_sexpr e1, cexpr_of_sexpr e2)
+  in
+  let e = Conv.expr_of_cexpr (cexpr_of_sexpr e) in
+  Format.fprintf fmt "%a" (Printer.pp_expr ~debug:true) e
+
 let pp_symbolic_slice fmt s =
-  Format.fprintf fmt "[%a:%a]" pp_expr s.ss_ofs pp_expr s.ss_len
+  Format.fprintf fmt "[%a:%a]" pp_sexpr s.ss_ofs pp_sexpr s.ss_len
 
 let pp_symbolic_zone fmt z =
   Format.fprintf fmt "@[<hv>%a@]" (Format.pp_print_list pp_symbolic_slice) z
@@ -51,7 +68,7 @@ let pp_bindings fmt bindings =
   Format.fprintf fmt "@[<v>";
   Var0.Mvar.fold (fun x sp () ->
     Format.fprintf fmt "@[<h>%a -> %a@]@,"
-      pp_var (Obj.magic x) pp_expr sp) bindings ();
+      pp_var (Obj.magic x) pp_sexpr sp) bindings ();
   Format.fprintf fmt "@]"
 
 let pp_table fmt t =
