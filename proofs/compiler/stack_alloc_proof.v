@@ -5250,33 +5250,39 @@ Qed.
 
 (* ------------------------------------------------------------------ *)
 
+Definition mov_ofs_correct (mov_ofs : lval → assgn_tag → mov_kind → pexpr → pexpr → option instr_r) :=
+  forall (P' : sprog) ev s1 e w ofs pofs x tag mk ins s2,
+    p_globs P' = [::]
+    -> sem_pexpr true [::] s1 e >>= to_pointer = ok w
+    -> sem_pexpr true [::] s1 ofs >>= to_pointer = ok pofs
+    -> mov_ofs x tag mk e ofs = Some ins
+    -> write_lval true [::] x (Vword (w + pofs)) s1 = ok s2
+    -> exists2 vm2, sem_i P' ev s1 ins (with_vm s2 vm2) & evm s2 =1 vm2.
+
+Definition immediate_correct (immediate : var_i → Z → instr_r) :=
+  forall (P' : sprog) w s (x: var_i) z,
+    vtype x = sword Uptr ->
+    sem_i P' w s (immediate x z)
+      (with_vm s (evm s).[x <- Vword (wrepr Uptr z)]).
+
+Definition swap_correct (swap : assgn_tag → var_i → var_i → var_i → var_i → instr_r) :=
+  forall (P' : sprog) rip s tag (x y z w : var_i) (pz pw: pointer),
+    vtype x = spointer -> vtype y = spointer -> 
+    vtype z = spointer -> vtype w = spointer -> 
+    (evm s).[z] = Vword pz ->
+    (evm s).[w] = Vword pw -> 
+    sem_i P' rip s (swap tag x y z w)
+      (with_vm s ((evm s).[x <- Vword pw]).[y <- Vword pz]).
+
 (* FIXME: should sap_mov_ofs takes an offset as argument. It is a pexpr.
    Should it be of type int or of type word Uptr? For now, it is a word Uptr. *)
 Record h_stack_alloc_params (saparams : stack_alloc_params) :=
   {
     (* [mov_ofs] must behave as described in stack_alloc.v. *)
-    mov_ofsP :
-      forall (P' : sprog) ev s1 e i ofs pofs x tag vpk ins s2,
-        p_globs P' = [::]
-        -> sem_pexpr true [::] s1 e >>= to_pointer = ok i
-        -> sem_pexpr true [::] s1 ofs >>= to_pointer = ok pofs
-        -> sap_mov_ofs saparams x tag vpk e ofs = Some ins
-        -> write_lval true [::] x (Vword (i + pofs)) s1 = ok s2
-        -> exists2 vm2, sem_i P' ev s1 ins (with_vm s2 vm2) & evm s2 =1 vm2;
+    mov_ofsP : mov_ofs_correct saparams.(sap_mov_ofs);
     (* specification of sap_immediate *)
-    sap_immediateP :
-      forall (P' : sprog) w s (x: var_i) z,
-        vtype x = sword Uptr ->
-        sem_i P' w s (sap_immediate saparams x z)
-          (with_vm s (evm s).[x <- Vword (wrepr Uptr z)]);
-    sap_swapP : 
-      forall (P' : sprog) rip s tag (x y z w : var_i) (pz pw: pointer), 
-        vtype x = spointer -> vtype y = spointer -> 
-        vtype z = spointer -> vtype w = spointer -> 
-        (evm s).[z] = Vword pz ->
-        (evm s).[w] = Vword pw -> 
-        sem_i P' rip s (sap_swap saparams tag x y z w)
-             (with_vm s ((evm s).[x <- Vword pw]).[y <- Vword pz])
+    sap_immediateP : immediate_correct saparams.(sap_immediate);
+    sap_swapP : swap_correct saparams.(sap_swap)
   }.
 
 Context

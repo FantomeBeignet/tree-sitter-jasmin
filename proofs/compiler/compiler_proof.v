@@ -61,6 +61,8 @@ Context
 Hypothesis print_uprogP : forall s p, cparams.(print_uprog) s p = p.
 Hypothesis print_sprogP : forall s p, cparams.(print_sprog) s p = p.
 Hypothesis print_linearP : forall s p, cparams.(print_linear) s p = p.
+Hypothesis print_trmapP :
+  forall ii table rmap, cparams.(print_trmap) ii table rmap = (table, rmap).
 
 #[local]
 Existing Instance progUnit.
@@ -335,7 +337,13 @@ Qed.
 
 (* TODO: move *)
 Remark sp_globs_stack_alloc rip rsp data ga la (p: uprog) (p': sprog) :
-  alloc_prog (ap_shp aparams) (ap_sap aparams) (fresh_var_ident cparams (Reg (Normal, Direct)) dummy_instr_info 0) rip rsp data ga la p = ok p' →
+  alloc_prog
+      (ap_shp aparams) (ap_sap aparams) (ap_is_move_op aparams)
+      (fun vk => fresh_var_ident cparams vk dummy_instr_info)
+      (print_trmap cparams)
+      (string_of_sr cparams)
+      rip rsp data ga la p
+    = ok p' →
   sp_globs (p_extra p') = data.
 Proof.
   by rewrite /alloc_prog; t_xrbindP => ???? _ <-.
@@ -515,7 +523,7 @@ Proof.
     apply Forall2_impl.
     by move=> _ ? <-; apply isSome_omap.
 
-  have := alloc_progP _ (hap_hsap haparams) ok_p2 exec_p1 m_mi.
+  have := alloc_progP _ (hap_hsap haparams) print_trmapP haparams.(hap_is_move_opP) ok_p2 exec_p1 m_mi.
   move => /(_ (hap_hshp haparams) va' hargs heqinmem ok_mi').
   case => mi' [] vr2 [] exec_p2 m'_mi' vr2_wf vr2_eqinmem U.
   have [] := compiler_third_partP ok_p3.
