@@ -1437,7 +1437,11 @@ Definition merge_status vars (_x:var) (status1 status2: option status) :=
   let%opt status2 := status2 in
   match status1, status2 with
   | Unknown, _ | _, Unknown => None
-  | Valid, s | s, Valid => Some s
+  | Valid, Valid => Some Valid
+  | Valid, Borrowed i | Borrowed i, Valid =>
+    if all (fun s => Sv.subset (read_slice s) vars && typecheck_slice s) i then
+      Some (Borrowed i)
+    else None
   | Borrowed i1, Borrowed i2 =>
     let%opt i := merge_interval i1 i2 in
     if all (fun s => Sv.subset (read_slice s) vars && typecheck_slice s) i then
@@ -1802,6 +1806,7 @@ Fixpoint alloc_i sao (trmap:table*region_map) (i: instr) : cexec (table * region
       ok (table, rmap, [:: MkI ii (Cwhile a (flatten c1) e (flatten c2))])
 
     | Ccall rs fn es =>
+      let table := remove_binding_lvals table rs in
       Let ri := add_iinfo ii (alloc_call sao rmap rs fn es) in
       ok (table, ri.1, [::MkI ii ri.2])
 
